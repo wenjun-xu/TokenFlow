@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TokenFlow — 本地 Token 明细</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header><h1>TokenFlow</h1><p>本地 · 只读 · 无遥测</p><button id="refresh" type="button">刷新</button></header>
+  <div id="status" role="status" aria-live="polite"></div>
+  <div id="error" role="alert" hidden></div>
+  <p id="metadata"></p>
+  <main id="content" aria-busy="true"></main>
+  <footer>总 Token = 输入 + 输出；缓存读取独立展示，不重复相加。未知不等于零。
+    输入包含每次请求重复携带的上下文，不代表唯一文本量。停止服务：<code>tokenflow stop</code>。</footer>
+</body>
+</html>
