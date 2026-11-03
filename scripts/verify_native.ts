@@ -23,11 +23,11 @@ async function cli(args: string[]) {
 }
 try {
   fixture.session();
-  fixture.usage();
+  fixture.usage({ duration_ms: 1.5, time_to_first_token_ms: 12.375 });
   fixture.connection.exec("PRAGMA journal_mode=WAL");
   fixture.usage();
   const before = ["", "-wal", "-shm"].map(suffix => readFileSync(fixture.db + suffix));
-  assert.equal((await cli(["--version"])).out.trim(), "0.2.0");
+  assert.equal((await cli(["--version"])).out.trim(), "0.2.1");
   const missing = await cli(["start", "--db", join(home, "missing.db"), "--no-browser"]);
   assert.equal(missing.code, 1);
   const started = await cli(["start", "--db", fixture.db, "--no-browser"]);
@@ -40,6 +40,11 @@ try {
   const data = await response.json() as { metrics: { total_tokens: string; calls: string } };
   assert.equal(data.metrics.total_tokens, "240");
   assert.equal(data.metrics.calls, "2");
+  const detail = await (await fetch(origin + "/api/sessions/s", { headers })).json() as {
+    requests: Array<{ duration_ms: number | string | null; time_to_first_token_ms: number | string | null }>;
+  };
+  assert.equal(detail.requests[0]?.duration_ms, 1.5);
+  assert.equal(detail.requests[0]?.time_to_first_token_ms, 12.375);
   assert.equal(await (await fetch(origin + "/app.js")).text(), readFileSync(join(import.meta.dir, "../web/app.js"), "utf8"));
   assert.equal((await fetch(origin + "/api/dashboard")).status, 403);
   for (const [index, suffix] of ["", "-wal", "-shm"].entries()) {

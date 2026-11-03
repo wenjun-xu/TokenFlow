@@ -134,8 +134,39 @@ test("stable Python-compatible Unicode id/model ordering and ID preview", () => 
   expect(store.dashboard({}).sessions.slice(0, 2).map((r: any) => r.id)).toEqual(["\uE000", "😀".repeat(13)]);
   expect(store.session("😀".repeat(13), {}).session.title).toBe("😀".repeat(12) + "…");
 });
+test("fractional millisecond metrics retain precision under INTEGER declarations", () => {
+  f.usage({ duration_ms: 1.5, time_to_first_token_ms: 12.375 });
+  f.usage({ duration_ms: null, time_to_first_token_ms: null });
+  expect(store.dashboard({}).metrics.total_tokens).toBe("240");
+  const requests = store.session("s", {}).requests;
+  expect(requests[0]).toMatchObject({ duration_ms: 1.5, time_to_first_token_ms: 12.375, turn_index: null });
+  expect(requests[1]).toMatchObject({ duration_ms: null, time_to_first_token_ms: null });
+  const encoded = JSON.parse(JSON.stringify(requests));
+  expect(encoded[0].time_to_first_token_ms).toBe(12.375);
+});
+test("fractional millisecond metrics support REAL declarations", () => {
+  f.connection.exec("DROP TABLE assistant_usage_events");
+  f.connection.exec(`CREATE TABLE assistant_usage_events(
+    id INTEGER PRIMARY KEY, session_id TEXT, model TEXT, input_tokens INTEGER, output_tokens INTEGER,
+    cache_read_tokens INTEGER, created_at TEXT, duration_ms REAL, time_to_first_token_ms REAL,
+    turn_index INTEGER, agent_id TEXT, initiator TEXT, finish_reason TEXT)`);
+  f.usage({ duration_ms: 1.5, time_to_first_token_ms: 12.375, turn_index: 2 });
+  expect(store.dashboard({}).metrics.calls).toBe("1");
+  expect(store.session("s", {}).requests[0]).toMatchObject({
+    duration_ms: 1.5, time_to_first_token_ms: 12.375, turn_index: "2",
+  });
+});
+test("invalid performance values and fractional turn indices fail explicitly", () => {
+  f.usage({ time_to_first_token_ms: "invalid" });
+  expect(() => store.dashboard({})).toThrow("time_to_first_token_ms");
+  f.connection.exec("UPDATE assistant_usage_events SET time_to_first_token_ms=1.5,turn_index=1.5");
+  expect(() => store.dashboard({})).toThrow("turn_index");
+  f.connection.exec("UPDATE assistant_usage_events SET turn_index=1");
+  f.usage({ duration_ms: Infinity });
+  expect(() => store.dashboard({})).toThrow("duration_ms");
+});
 test("aggregation deadline and malformed performance field", () => {
-  f.usage({ duration_ms: 1.5 });
+  f.usage({ duration_ms: "invalid" });
   expect(() => store.dashboard({})).toThrow(StoreError);
   f.connection.exec("UPDATE assistant_usage_events SET duration_ms=1");
   expect(() => new Store(f.db, "UTC", 0).dashboard({})).toThrow(StoreError);

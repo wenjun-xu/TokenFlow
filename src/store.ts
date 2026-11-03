@@ -10,6 +10,7 @@ export const USAGE_FIELDS = ["id", "session_id", "model", "input_tokens", "outpu
   "created_at", "duration_ms", "time_to_first_token_ms", "turn_index", "agent_id", "initiator", "finish_reason"];
 const TURN_FIELDS = ["id", "session_id", "turn_index", "timestamp", "user_message", "assistant_response"];
 const TOKEN_FIELDS = ["input_tokens", "output_tokens", "cache_read_tokens"] as const;
+const PERFORMANCE_FIELDS = new Set(["duration_ms", "time_to_first_token_ms"]);
 type Row = Record<string, any>;
 
 export function integerStrings(value: any): any {
@@ -49,7 +50,15 @@ function textFields(row: Row, fields: string[]) {
   if (fields.some(f => row[f] !== null && typeof row[f] !== "string")) throw new StoreError("数据库文本字段类型不兼容");
 }
 function numericFields(row: Row, fields: string[]) {
-  if (fields.some(f => row[f] !== null && typeof row[f] !== "bigint")) throw new StoreError("请求性能指标或原始轮次序号不是整数");
+  for (const field of fields) {
+    const value = row[field];
+    if (value === null || typeof value === "bigint") continue;
+    if (PERFORMANCE_FIELDS.has(field)) {
+      if (typeof value === "number" && Number.isFinite(value)) continue;
+      throw new StoreError(`请求耗时字段 ${field} 必须是有限数值或 NULL`);
+    }
+    throw new StoreError(`原始轮次字段 ${field} 必须是整数或 NULL`);
+  }
 }
 function sqliteError(error: unknown): StoreError {
   const code = (error as { code?: string }).code ?? "";
@@ -73,7 +82,10 @@ export class Store {
       for (const field of fields) {
         const declared = columns.get(field);
         const isNumber = numeric.has(field) && !(table === "sessions" && field === "id");
-        if (!declared || (isNumber ? !declared.includes("INT") : !/TEXT|CHAR|CLOB/.test(declared))) {
+        const validType = declared && (isNumber
+          ? PERFORMANCE_FIELDS.has(field) ? /INT|REAL|FLOA|DOUB|NUMERIC|DECIMAL/.test(declared) : declared.includes("INT")
+          : /TEXT|CHAR|CLOB/.test(declared));
+        if (!validType) {
           throw new StoreError(`数据库结构不兼容：${table}.${field} 必需字段类型错误或缺失`);
         }
       }

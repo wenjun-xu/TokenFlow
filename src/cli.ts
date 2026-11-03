@@ -4,7 +4,7 @@ import { workerMain, probeMain } from "./query";
 import { defaultDB } from "./private";
 import { StoreError } from "./store";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.2.1";
 const HELP = `TokenFlow：本地只读 Copilot Token 明细
 
 用法：

@@ -69,8 +69,16 @@ test("HTTP security whitelist strict params and embedded native UI", async () =>
   } finally { await runner.close(); await server.stop(true); }
 });
 test("background reuse alias different db forged control stop stale pid", async () => {
+  f.connection.exec("PRAGMA journal_mode=WAL; UPDATE assistant_usage_events SET duration_ms=1.5,time_to_first_token_ms=12.375");
+  const before = bytes();
   const [info, reused] = await start(f.db, f.state);
   expect(reused).toBe(false);
+  const response = await fetch(`http://127.0.0.1:${info.port}/api/sessions/s`, {
+    headers: { "X-TokenFlow-Key": info.token },
+  });
+  expect(response.status).toBe(200);
+  expect((await response.json()).requests[0]).toMatchObject({ duration_ms: 1.5, time_to_first_token_ms: 12.375 });
+  expect(bytes()).toEqual(before);
   const [same, again] = await start(f.db, f.state);
   expect(again).toBe(true); expect(same.identity).toBe(info.identity);
   const alias = join(f.root, "alias"); symlinkSync(f.db, alias);
@@ -93,7 +101,7 @@ test("CLI help/version no source or state access", async () => {
       env: { ...process.env, HOME: f.root, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" } });
     expect(await p.exited).toBe(0);
     const text = await new Response(p.stdout).text();
-    expect(text).toContain(arg === "--version" ? "0.2.0" : "start");
+    expect(text).toContain(arg === "--version" ? "0.2.1" : "start");
     expect(existsSync(join(f.root, "Library"))).toBe(false);
   }
 });

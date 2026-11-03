@@ -22,7 +22,7 @@ test("native compile and standalone entry/resources with no external runtime", a
     for (const arg of ["--version", "--help"]) {
       const cli = Bun.spawn([copied, arg], { cwd: outside, env, stdout: "pipe", stderr: "pipe" });
       expect(await cli.exited).toBe(0);
-      expect(await new Response(cli.stdout).text()).toContain(arg === "--version" ? "0.2.0" : "start");
+      expect(await new Response(cli.stdout).text()).toContain(arg === "--version" ? "0.2.1" : "start");
     }
     expect(existsSync(join(f.root, "Library"))).toBe(false);
     const worker = Bun.spawn([copied, "_query"], { cwd: outside, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
@@ -34,7 +34,7 @@ test("native compile and standalone entry/resources with no external runtime", a
   } finally { f.close(); }
 }, 120000);
 test("compiled native start query stop, embedding, WAL, reuse, restart and deletion503", async () => {
-  const f = new Fixture(); f.session(); f.usage(); f.connection.exec("PRAGMA journal_mode=WAL"); f.usage();
+  const f = new Fixture(); f.session(); f.usage({ duration_ms: 1.5, time_to_first_token_ms: 12.375 }); f.connection.exec("PRAGMA journal_mode=WAL"); f.usage();
   const native = join(f.root, "tokenflow-test");
   const build = Bun.spawn([process.execPath, "build", "--compile", "--target=bun-darwin-arm64",
     `--compile-executable-path=${process.execPath}`, "--no-compile-autoload-dotenv", "--no-compile-autoload-bunfig",
@@ -67,6 +67,8 @@ test("compiled native start query stop, embedding, WAL, reuse, restart and delet
     const info = readState(f.state);
     const origin = `http://127.0.0.1:${info.port}`, headers = { "X-TokenFlow-Key": info.token };
     expect((await (await fetch(origin + "/api/dashboard", { headers })).json()).metrics.calls).toBe("2");
+    expect((await (await fetch(origin + "/api/sessions/s", { headers })).json()).requests[0])
+      .toMatchObject({ duration_ms: 1.5, time_to_first_token_ms: 12.375 });
     expect(await (await fetch(origin + "/app.js")).text()).toBe(readFileSync(join(import.meta.dir, "../web/app.js"), "utf8"));
     expect(await (await fetch(origin + "/style.css")).text()).toBe(readFileSync(join(import.meta.dir, "../web/style.css"), "utf8"));
     expect(readFileSync(f.db)).toEqual(before); expect(readFileSync(f.db + "-wal")).toEqual(wal); expect(readFileSync(f.db + "-shm")).toEqual(shm);
