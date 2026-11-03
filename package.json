@@ -1,0 +1,16 @@
+{
+  "name": "tokenflow",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "bin": { "tokenflow": "./src/cli.ts" },
+  "scripts": {
+    "test": "bun test tests-ts tests-release",
+    "typecheck": "tsc --noEmit",
+    "release": "bun scripts/prepare_release.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.4",
+    "typescript": "5.9.3"
+  }
+}

@@ -26,7 +26,7 @@ const context = vm.createContext({
   sessionStorage: {getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value)},
   fetch: () => new Promise(() => {}), window: {getSelection: () => ""},
 });
-const source = fs.readFileSync(path.join(__dirname, "../tokenflow/web/app.js"), "utf8");
+const source = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8");
 vm.runInContext(source, context);
 assert.equal(storage.get("tokenflow-key"), "synthetic-secret");
 assert(!history.url.includes("#"));
