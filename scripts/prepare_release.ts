@@ -74,6 +74,7 @@ export function prepare(output: string, intelRuntime?: string): void {
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error("Invalid package version");
   if (Bun.version !== "1.4.4") throw new Error("Release builds require Bun 1.4.4");
   if (process.platform !== "darwin") throw new Error("Build and sign releases on macOS");
+  command([process.execPath, "build", "src/tool-summary.js", "--target=browser", "--minify", "--outfile", "web/tool-summary.js"]);
   output = resolve(output);
   mkdirSync(output, { recursive: true });
   const checksums: Record<string, string> = {};

@@ -5,6 +5,8 @@ import { randomBytes } from "node:crypto";
 import { Store, StoreError } from "./store";
 import { systemZone, zoneFormatter, type Args } from "./dates";
 import { stateDirectory, openPrivate } from "./private";
+import { toolActivity } from "./tools";
+import { singleCall, roundActivities } from "./calls";
 
 export const SANDBOX = "/usr/bin/sandbox-exec";
 export const PROFILE = "(version 1)(allow default)(deny file-write*)";
@@ -137,7 +139,7 @@ export class QueryRunner {
     const db = validateSource(this.db, this.state);
     if (JSON.stringify(fileIdentity(db)) !== JSON.stringify(this.file_identity)) throw new StoreError("源数据库已替换，请停止后重新启动服务");
   }
-  async run(operation: "dashboard" | "session", args: Args, sid: string | null = null): Promise<any> {
+  async run(operation: "dashboard" | "session" | "rounds" | "activities" | "request" | "tools" | "call", args: Args, sid: string | null = null, requestId: string | null = null): Promise<any> {
     if (this.child) {
       if (this.waiting) throw new StoreError("读取繁忙，请稍后重试");
       this.waiting = true;
@@ -149,7 +151,7 @@ export class QueryRunner {
     }
     if (this.closed) throw new StoreError("服务正在停止，请执行 tokenflow start");
     this.validateIdentity();
-    const request = JSON.stringify({ db: this.db, state: this.state, zone: this.zone, operation, args, sid,
+    const request = JSON.stringify({ db: this.db, state: this.state, zone: this.zone, operation, args, sid, request_id: requestId,
       file_identity: this.file_identity, timeout: Math.max(0.01, this.timeout - 1) });
     if (Buffer.byteLength(request) > 16384) throw new StoreError("查询参数过长", 400);
     let child;
@@ -200,9 +202,18 @@ export async function workerMain(): Promise<number> {
     if (typeof request.zone !== "string" || typeof request.timeout !== "number" || request.timeout <= 0
       || !request.args || typeof request.args !== "object" || Array.isArray(request.args)) throw new StoreError("查询参数或时区配置无效", 400);
     zoneFormatter(request.zone);
+    if (request.operation === "call" && Object.keys(request.args).length) throw new StoreError("未知查询参数", 400);
     const store = new Store(db, request.zone, request.timeout);
     const data = request.operation === "dashboard" ? store.dashboard(request.args)
       : request.operation === "session" && typeof request.sid === "string" ? store.session(request.sid, request.args)
+      : request.operation === "rounds" && typeof request.sid === "string" ? store.rounds(request.sid, request.args)
+      : request.operation === "activities" && typeof request.sid === "string" ? await roundActivities(db, request.sid, store.roundAnchors(request.sid, request.args), request.zone)
+      : request.operation === "request" && typeof request.sid === "string" && typeof request.request_id === "string"
+        ? store.request(request.sid, request.request_id, request.args)
+      : request.operation === "tools" && typeof request.sid === "string" && typeof request.request_id === "string"
+        ? await toolActivity(db, request.sid, store.toolAnchor(request.sid, request.request_id), request.args, request.zone)
+      : request.operation === "call" && typeof request.sid === "string" && typeof request.request_id === "string"
+        ? await singleCall(db, request.sid, store.callAnchor(request.sid, request.request_id), request.zone)
       : (() => { throw new StoreError("未知读取操作", 400); })();
     if (JSON.stringify(fileIdentity(db)) !== JSON.stringify(request.file_identity)) throw new StoreError("读取期间源数据库已替换，请重新启动");
     result = { data };

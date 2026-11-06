@@ -40,13 +40,21 @@ export function compareTime(a: TimeKey, b: TimeKey): number {
 export function zoneFormatter(zone: string): Intl.DateTimeFormat {
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: zone, calendar: "gregory", numberingSystem: "latn", hourCycle: "h23",
-    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", era: "short",
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", era: "short",
   });
   const options = formatter.resolvedOptions();
   if (options.calendar !== "gregory" || options.numberingSystem !== "latn" || options.hourCycle !== "h23") {
     throw new Error("无法验证 Gregorian OS 本地时区");
   }
   return formatter;
+}
+
+export function formatTime(value: unknown, formatter: Intl.DateTimeFormat): string | null {
+  const key = parseTime(value);
+  if (!key) return null;
+  const parts = Object.fromEntries(formatter.formatToParts(new Date(key[0] * 1000)).map(p => [p.type, p.value]));
+  if (parts.era !== "AD" || Number(parts.year) > 9999) return null;
+  return `${parts.year.padStart(4, "0")}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
 export function systemZone(localtime = "/etc/localtime"): string {

@@ -1,13 +1,15 @@
 import index from "../web/index.html" with { type: "text" };
 import app from "../web/app.js" with { type: "text" };
 import style from "../web/style.css" with { type: "text" };
+import summary from "../web/tool-summary.js" with { type: "text" };
 import { timingSafeEqual } from "node:crypto";
 import { StoreError } from "./store";
 import type { QueryRunner } from "./query";
 
 if (typeof index !== "string") throw new Error("Embedded HTML resource is unavailable");
 const ASSETS = new Map<string, [string, string]>([["/", [index, "text/html; charset=utf-8"]], ["/app.js", [app, "text/javascript; charset=utf-8"]],
-  ["/style.css", [style, "text/css; charset=utf-8"]]]);
+  ["/style.css", [style, "text/css; charset=utf-8"]], ["/tool-summary.js", [summary, "text/javascript; charset=utf-8"]]]);
+const PAGE_PARAMS = new Set(["sid", "list", "year", "month", "day", "page", "requestPage", "turnPage", "expandedTurn", "round", "roundPage"]);
 export const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 function response(status: number, body: unknown, mime = "application/json; charset=utf-8"): Response {
   return new Response(typeof body === "string" ? body : JSON.stringify(body), { status, headers: {
@@ -32,7 +34,14 @@ export function makeServer(runner: QueryRunner, key: string) {
       if (req.method !== "GET") return response(405, { error: "仅允许 GET 读取；停止服务请执行 tokenflow stop" });
       const url = new URL(req.url);
       const asset = ASSETS.get(url.pathname);
-      if (asset) return url.search ? response(400, { error: "静态资源不接受查询参数" }) : response(200, asset[0], asset[1]);
+      if (asset) {
+        if (url.pathname !== "/" && url.search) return response(400, { error: "静态资源不接受查询参数" });
+        const names = [...url.searchParams.keys()];
+        if (names.length > 12 || new Set(names).size !== names.length || names.some(name => !PAGE_PARAMS.has(name))) {
+          return response(400, { error: "页面查询参数无效" });
+        }
+        return response(200, asset[0], asset[1]);
+      }
       if (!url.pathname.startsWith("/api/")) return response(404, { error: "页面不存在" });
       if (!sameSecret(headers.get("x-tokenflow-key"), key)) return response(403, { error: "访问凭证缺失或失效，请重新执行 tokenflow start 并打开完整地址" });
       try {
@@ -43,6 +52,42 @@ export function makeServer(runner: QueryRunner, key: string) {
           Object.defineProperty(args, name, { value, enumerable: true });
         }
         if (url.pathname === "/api/dashboard") return response(200, await runner.run("dashboard", args));
+        const activityPath = /^\/api\/sessions\/([^/]+)\/rounds\/activities$/.exec(url.pathname);
+        if (activityPath) {
+          let sid;
+          try { sid = decodeURIComponent(activityPath[1]); } catch { return response(400, { error: "会话 ID 无效" }); }
+          if (!sid || sid.length > 1024) return response(400, { error: "会话 ID 无效" });
+          return response(200, await runner.run("activities", args, sid));
+        }
+        const roundsPath = /^\/api\/sessions\/([^/]+)\/rounds$/.exec(url.pathname);
+        if (roundsPath) {
+          let sid;
+          try { sid = decodeURIComponent(roundsPath[1]); }
+          catch { return response(400, { error: "会话 ID 无效" }); }
+          if (!sid || sid.length > 1024) return response(400, { error: "会话 ID 无效" });
+          return response(200, await runner.run("rounds", args, sid));
+        }
+        const callPath = /^\/api\/sessions\/([^/]+)\/requests\/([^/]+)\/call$/.exec(url.pathname);
+        if (callPath) {
+          let sid, id;
+          try { sid = decodeURIComponent(callPath[1]); id = decodeURIComponent(callPath[2]); }
+          catch { return response(400, { error: "会话或请求 ID 无效" }); }
+          return response(200, await runner.run("call", args, sid, id));
+        }
+        const toolsPath = /^\/api\/sessions\/([^/]+)\/turns\/([^/]+)\/tools$/.exec(url.pathname);
+        if (toolsPath) {
+          let sid, id;
+          try { sid = decodeURIComponent(toolsPath[1]); id = decodeURIComponent(toolsPath[2]); }
+          catch { return response(400, { error: "会话或轮次 ID 无效" }); }
+          return response(200, await runner.run("tools", args, sid, id));
+        }
+        const requestPath = /^\/api\/sessions\/([^/]+)\/requests\/([^/]+)$/.exec(url.pathname);
+        if (requestPath) {
+          let sid, id;
+          try { sid = decodeURIComponent(requestPath[1]); id = decodeURIComponent(requestPath[2]); }
+          catch { return response(400, { error: "会话或请求 ID 无效" }); }
+          return response(200, await runner.run("request", args, sid, id));
+        }
         if (/^\/api\/sessions\/[^/]+$/.test(url.pathname)) {
           let sid;
           try { sid = decodeURIComponent(url.pathname.slice("/api/sessions/".length)); }

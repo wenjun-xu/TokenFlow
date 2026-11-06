@@ -68,6 +68,57 @@ test("HTTP security whitelist strict params and embedded native UI", async () =>
     expect(await (await request("/app.js")).text()).toContain("sessionStorage");
   } finally { await runner.close(); await server.stop(true); }
 });
+test("HTML navigation accepts detail, filter, paging and return-list state without bypassing API authentication", async () => {
+  const runner = await QueryRunner.create(f.db, f.state, "UTC");
+  const server = makeServer(runner, "synthetic-navigation-key");
+  const origin = `http://127.0.0.1:${server.port}`;
+  try {
+    const html = await (await fetch(origin + "/")).text();
+    const queries = [
+      "sid=s&list=",
+      "year=2024&month=2&day=29&page=3",
+      "sid=s&list=year%3D2024%26month%3D2%26day%3D29%26page%3D3&year=2024&month=2&day=29",
+      "sid=s&list=&requestPage=2&turnPage=2&expandedTurn=8",
+      "sid=%3Cscript%3E&list=",
+    ];
+    for (const query of queries) {
+      const response = await fetch(origin + "/?" + query);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toContain("text/html");
+      expect(await response.text()).toBe(html);
+    }
+    for (const path of ["/?key=not-a-fragment", "/?unknown=1", "/?sid=s&sid=other",
+      "/app.js?sid=s", "/style.css?page=2"]) {
+      expect((await fetch(origin + path)).status).toBe(400);
+    }
+    expect((await fetch(origin + "/api/sessions/s")).status).toBe(403);
+    const detail = await fetch(origin + "/api/sessions/s", { headers: { "X-TokenFlow-Key": "synthetic-navigation-key" } });
+    expect(detail.status).toBe(200);
+    expect((await detail.json()).session.id).toBe("s");
+  } finally { await runner.close(); await server.stop(true); }
+});
+test("authenticated request conversation endpoint stays isolated and session-scoped", async () => {
+  f.connection.exec("PRAGMA journal_mode=WAL; UPDATE assistant_usage_events SET turn_index=0");
+  f.turn(0, "<script>synthetic dialogue</script>");
+  const before = bytes();
+  const runner = await QueryRunner.create(f.db, f.state, "UTC");
+  const server = makeServer(runner, "request-dialog-key");
+  const origin = `http://127.0.0.1:${server.port}`;
+  try {
+    const path = "/api/sessions/s/requests/1";
+    expect((await fetch(origin + path)).status).toBe(403);
+    const headers = { "X-TokenFlow-Key": "request-dialog-key" };
+    const response = await fetch(origin + path, { headers });
+    expect(response.status).toBe(200);
+    expect((await response.json()).turns[0].user_message).toContain("synthetic dialogue");
+    for (const [suffix, status] of [["?view=invalid", 400], ["?view=all&view=all", 400],
+      ["?expandedTurn=999", 404]] as [string, number][]) {
+      expect((await fetch(origin + path + suffix, { headers })).status).toBe(status);
+    }
+    expect((await fetch(origin + "/api/sessions/other/requests/1", { headers })).status).toBe(404);
+    expect(bytes()).toEqual(before);
+  } finally { await runner.close(); await server.stop(true); }
+});
 test("background reuse alias different db forged control stop stale pid", async () => {
   f.connection.exec("PRAGMA journal_mode=WAL; UPDATE assistant_usage_events SET duration_ms=1.5,time_to_first_token_ms=12.375");
   const before = bytes();
@@ -101,7 +152,7 @@ test("CLI help/version no source or state access", async () => {
       env: { ...process.env, HOME: f.root, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" } });
     expect(await p.exited).toBe(0);
     const text = await new Response(p.stdout).text();
-    expect(text).toContain(arg === "--version" ? "0.2.1" : "start");
+    expect(text).toContain(arg === "--version" ? "0.2.2" : "start");
     expect(existsSync(join(f.root, "Library"))).toBe(false);
   }
 });
