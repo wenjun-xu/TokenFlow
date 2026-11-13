@@ -14,7 +14,7 @@ export async function control(state: string, info: Info, action: "status" | "sto
   return await new Promise((resolve, reject) => {
     const socket = createConnection({ path: join(state, "c"), allowHalfOpen: true });
     let data = "";
-    const fail = () => { socket.destroy(); reject(Error("实例锁已占用，但无法验证私有控制通道；未操作任何旧 PID")); };
+    const fail = () => { socket.destroy(); reject(Error("The instance lock is held, but the private control channel could not be verified; no stale PID was acted on")); };
     socket.setTimeout(2000, fail);
     socket.on("error", fail);
     socket.on("connect", () => socket.end(JSON.stringify({ identity: info.identity, command: action }) + "\n"));
@@ -71,16 +71,16 @@ export async function start(db = defaultDB(), inputState = defaultState(), timeo
     const [program, ...args] = command("_serve");
     child = spawn(program, args, { detached: true, stdio: ["pipe", "pipe", "ignore"],
       env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" } });
-    child.on("error", () => { startupError = "无法启动后台服务，请检查安装"; });
+    child.on("error", () => { startupError = "Could not start the background service; check the installation"; });
     child.stdout!.on("data", chunk => {
       childOutput += chunk.toString("utf8");
-      if (Buffer.byteLength(childOutput) > 8192) { startupError = "后台服务就绪结果无效"; return; }
+      if (Buffer.byteLength(childOutput) > 8192) { startupError = "Invalid background service readiness result"; return; }
       if (childOutput.includes("\n")) {
         try { const result = JSON.parse(childOutput.trim()); if (result.error) startupError = result.error; }
-        catch { startupError = "后台服务就绪结果无效"; }
+        catch { startupError = "Invalid background service readiness result"; }
       }
     });
-    child.stdin!.on("error", () => { startupError ??= "后台服务启动管道失败"; });
+    child.stdin!.on("error", () => { startupError ??= "The background service startup pipe failed"; });
     child.stdin!.end(JSON.stringify({ db, state }));
     child.unref();
   };
@@ -95,7 +95,7 @@ export async function start(db = defaultDB(), inputState = defaultState(), timeo
       } catch { info = undefined; }
       if (info) {
         if (info.db !== db || JSON.stringify(info.file_identity) !== JSON.stringify(identity)) {
-          throw Error("已运行实例使用其他数据库或源文件已替换，请先执行 tokenflow stop");
+          throw Error("The running instance uses another database or its source file was replaced; run tokenflow stop first");
         }
         if (await httpReady(info)) {
           child?.stdout?.destroy();
@@ -105,7 +105,7 @@ export async function start(db = defaultDB(), inputState = defaultState(), timeo
       }
       if (startupError) throw Error(startupError);
       if (child && child.exitCode !== null && child.exitCode !== 0 && child.exitCode !== 2) {
-        throw Error("后台服务启动失败，请检查 macOS 隔离支持及数据源");
+        throw Error("The background service failed to start; check macOS isolation support and the data source");
       }
       if (!info && (!child || child.exitCode === 0 || child.exitCode === 2)) {
         const next = lock(state);
@@ -114,7 +114,7 @@ export async function start(db = defaultDB(), inputState = defaultState(), timeo
       }
       await Bun.sleep(50);
     }
-    throw Error("后台服务启动超时；实例尚未就绪或控制通道失效，未按旧 PID 终止进程");
+    throw Error("Background service startup timed out; the instance is not ready or the control channel failed; no process was terminated using a stale PID");
   } catch (error) {
     if (child) await terminateOwned(child);
     throw error;
@@ -131,12 +131,12 @@ export async function stop(inputState = defaultState()): Promise<boolean> {
     while (performance.now() < deadline) {
       if (tryLock(owned.fd)) {
         cleanup(state);
-        if (await portOpen(info.port)) throw Error("实例锁已释放，但服务端口仍可访问，停止未确认");
+        if (await portOpen(info.port)) throw Error("The instance lock was released, but the service port is still reachable; shutdown is not confirmed");
         return true;
       }
       await Bun.sleep(25);
     }
-    throw Error("TokenFlow 停止超时，未按旧 PID 发送信号，请稍后重试");
+    throw Error("TokenFlow shutdown timed out; no signal was sent using a stale PID; try again later");
   } finally { closeSync(owned.fd); }
 }
 export async function serviceMain(): Promise<number> {
@@ -147,9 +147,9 @@ export async function serviceMain(): Promise<number> {
   const onSignal = () => stopRequested?.();
   try {
     const raw = await Bun.stdin.text();
-    if (Buffer.byteLength(raw) > 16384) throw new StoreError("启动参数过长");
+    if (Buffer.byteLength(raw) > 16384) throw new StoreError("Startup parameters are too long");
     const request = JSON.parse(raw);
-    if (typeof request.db !== "string" || typeof request.state !== "string") throw new StoreError("启动参数无效");
+    if (typeof request.db !== "string" || typeof request.state !== "string") throw new StoreError("Invalid startup parameters");
     state = stateDirectory(request.state);
     const owned = lock(state);
     fd = owned.fd;
@@ -200,7 +200,7 @@ export async function serviceMain(): Promise<number> {
     return 0;
   } catch (error) {
     if (log !== undefined) writeSync(log, "STARTUP_FAILED\n");
-    if (!ready) console.log(JSON.stringify({ error: error instanceof StoreError ? error.message : "后台服务启动失败，请检查安装、状态目录及隔离支持" }));
+    if (!ready) console.log(JSON.stringify({ error: error instanceof StoreError ? error.message : "The background service failed to start; check the installation, state directory, and isolation support" }));
     return 1;
   } finally {
     process.off("SIGTERM", onSignal); process.off("SIGINT", onSignal);

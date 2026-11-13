@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { Fixture } from "../tests-ts/support";
+import { VERSION } from "../src/cli";
 
 const project = resolve(import.meta.dir, "..");
 const workspace = basename(dirname(project)) === ".publish" ? resolve(project, "../..") : project;
@@ -11,7 +12,7 @@ if (Buffer.byteLength(join(home, "Library/Application Support/TokenFlow/c")) >= 
 }
 const binary = resolve(process.argv[2] ?? "");
 if (!process.argv[2]) throw new Error("Usage: bun scripts/verify_native.ts /path/to/extracted/tokenflow [expected-version]");
-const expectedVersion = process.argv[3] ?? "0.2.1";
+const expectedVersion = process.argv[3] ?? VERSION;
 mkdirSync(home, { mode: 0o700 });
 const fixture = new Fixture();
 const env = { PATH: "/usr/bin:/bin", HOME: home };
@@ -126,10 +127,10 @@ try {
   for (const [index, suffix] of ["", "-wal", "-shm"].entries()) {
     assert.deepEqual(readFileSync(fixture.db + suffix), before[index]);
   }
-  assert.match((await cli(["start", "--db", fixture.db, "--no-browser"])).out, /复用/);
+  assert.match((await cli(["start", "--db", fixture.db, "--no-browser"])).out, /reused/);
   assert.equal((await cli(["stop"])).code, 0);
   await assert.rejects(fetch(origin));
-  assert.match((await cli(["stop"])).out, /未运行/);
+  assert.match((await cli(["stop"])).out, /not running/);
   console.log("Public native CLI passed: no runtime on PATH, active WAL unchanged, total=240, embedded UI, authentication, reuse and verified stop.");
 } finally {
   const stopped = await cli(["stop"]);

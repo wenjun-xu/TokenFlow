@@ -22,13 +22,13 @@ test("native compile and standalone entry/resources with no external runtime", a
     for (const arg of ["--version", "--help"]) {
       const cli = Bun.spawn([copied, arg], { cwd: outside, env, stdout: "pipe", stderr: "pipe" });
       expect(await cli.exited).toBe(0);
-      expect(await new Response(cli.stdout).text()).toContain(arg === "--version" ? "0.2.2" : "start");
+      expect(await new Response(cli.stdout).text()).toContain(arg === "--version" ? "0.2.3" : "start");
     }
     expect(existsSync(join(f.root, "Library"))).toBe(false);
     const worker = Bun.spawn([copied, "_query"], { cwd: outside, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     worker.stdin.write(JSON.stringify({ state: f.state, db: join(f.root, "missing.db") })); worker.stdin.end();
     expect(await worker.exited).toBe(0);
-    expect(JSON.parse(await new Response(worker.stdout).text()).error).toContain("拒绝打开源库");
+    expect(JSON.parse(await new Response(worker.stdout).text()).error).toContain("opening the source database was refused");
     expect(existsSync(join(f.root, "missing.db"))).toBe(false);
     console.log("native production compile passed: bun build --compile --target=bun-darwin-arm64 src/cli.ts; outside source PATH=/usr/bin:/bin");
   } finally { f.close(); }
@@ -82,7 +82,7 @@ test("compiled native start query stop, embedding, WAL, reuse, restart and delet
     expect(await (await fetch(origin + "/app.js")).text()).toBe(readFileSync(join(import.meta.dir, "../web/app.js"), "utf8"));
     expect(await (await fetch(origin + "/style.css")).text()).toBe(readFileSync(join(import.meta.dir, "../web/style.css"), "utf8"));
     expect(readFileSync(f.db)).toEqual(before); expect(readFileSync(f.db + "-wal")).toEqual(wal); expect(readFileSync(f.db + "-shm")).toEqual(shm);
-    expect((await cli(["_test-start", f.db, f.state])).out).toContain("复用");
+    expect((await cli(["_test-start", f.db, f.state])).out).toContain("reused");
     expect((await cli(["_test-stop", f.state])).exit).toBe(0);
     await expect(fetch(origin)).rejects.toThrow();
     expect((await cli(["_test-start", f.db, f.state])).exit).toBe(0);
@@ -91,9 +91,9 @@ test("compiled native start query stop, embedding, WAL, reuse, restart and delet
     unlinkSync(f.db);
     const r = await fetch(`http://127.0.0.1:${second.port}/api/dashboard`, { headers: { "X-TokenFlow-Key": second.token } });
     expect(r.status).toBe(503);
-    expect((await r.json()).error).toContain("源数据库");
+    expect((await r.json()).error).toContain("source database");
     expect((await cli(["_test-stop", f.state])).exit).toBe(0);
-    expect((await cli(["_test-stop", f.state])).out).toContain("未运行");
+    expect((await cli(["_test-stop", f.state])).out).toContain("not running");
     expect(readdirSync(outside).sort()).toEqual([".env", "ambient-preload.ts", "bunfig.toml", "tokenflow"]);
     console.log("native isolated harness passed: real compiled CLI/runtime, separate cwd, PATH=/usr/bin:/bin, active WAL unchanged, restart, source deletion503, verified stop");
   } finally { await stop(f.state); f.close(); }

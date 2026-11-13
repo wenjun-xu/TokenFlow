@@ -62,7 +62,39 @@ test("tool activity reports missing or repeated user messages and pending calls 
   expect((await toolActivity(f.db, "s", "synthetic unique user", {}, "UTC"))).toMatchObject({ status: "ambiguous", tools: [] });
   expect((await toolActivity(f.db, "s", null, {}, "UTC")).status).toBe("unavailable");
   log([...basic(), record("user.message", { content: "different user", interactionId: "round" })]);
-  expect((await toolActivity(f.db, "s", "synthetic unique user", {}, "UTC"))).toMatchObject({ status: "ambiguous", tools: [] });
+  expect((await toolActivity(f.db, "s", "synthetic unique user", {}, "UTC"))).toMatchObject({ status: "matched", scope: "interaction", tools: [] });
+});
+test("steering messages share explicit interaction tools without losing pending calls or leaking reused model turn IDs", async () => {
+  log([
+    record("session.start", {sessionId:"s"}),
+    record("user.message", {content:"unrelated",interactionId:"previous"}),
+    record("assistant.turn_start", {turnId:"reused",interactionId:"previous"}),
+    record("tool.execution_start", {toolCallId:"unrelated-pending",turnId:"reused",toolName:"wrong",arguments:{}}),
+    ...basic().slice(1),
+    record("assistant.turn_start", {turnId:"reused",interactionId:"round"}),
+    record("assistant.message", {turnId:"reused",interactionId:"round",toolRequests:[{toolCallId:"first"}]}),
+    record("tool.execution_start", {toolCallId:"first",turnId:"reused",toolName:"view",arguments:{path:"first"}}),
+    record("tool.execution_complete", {toolCallId:"first",turnId:"reused",interactionId:"round",success:true,result:"first result"}),
+    record("user.message", {content:"steering user",interactionId:"round",delivery:"steering",turnId:"next"}),
+    record("assistant.turn_start", {turnId:"next",interactionId:"round"}),
+    record("tool.execution_start", {toolCallId:"pending",turnId:"next",toolName:"bash",arguments:{command:"test"}}),
+  ]);
+  const original = await toolActivity(f.db,"s","synthetic unique user",{full:"1"},"UTC");
+  const steering = await toolActivity(f.db,"s","steering user",{full:"1"},"UTC");
+  expect(original).toMatchObject({status:"matched",scope:"interaction",pagination:{total:"2"}});
+  expect(original.message).toContain("messages added during execution");
+  expect(original.tools.map(tool=>tool.id)).toEqual(["first","pending"]);
+  expect(original.tools[1]).toMatchObject({status:"pending",result:null});
+  expect(steering.tools).toEqual(original.tools);
+});
+test("identical user and tool records in one interaction deduplicate, but conflicting interaction evidence is rejected", async () => {
+  const start = record("tool.execution_start", {toolCallId:"one",turnId:"model-turn",toolName:"view",arguments:{}});
+  const complete = record("tool.execution_complete", {toolCallId:"one",interactionId:"round",success:true,result:"result"});
+  log([...basic(),basic()[1],start,start,complete,complete]);
+  const data = await toolActivity(f.db,"s","synthetic unique user",{},"UTC");
+  expect(data).toMatchObject({status:"matched",pagination:{total:"1"}});
+  log([...basic(),start,{...complete,data:{...complete.data,interactionId:"wrong"}}]);
+  expect(await toolActivity(f.db,"s","synthetic unique user",{},"UTC")).toMatchObject({status:"ambiguous",tools:[]});
 });
 test("tool activity refuses unsafe paths, wrong sessions and malformed committed records", async () => {
   expect((await toolActivity(f.db, "../s", "synthetic", {}, "UTC")).status).toBe("unavailable");

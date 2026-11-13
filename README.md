@@ -1,37 +1,41 @@
 # TokenFlow
 
-本地、只读的 GitHub Copilot CLI Token 用量 Dashboard。查看会话、模型用量、
-请求明细和已有对话；不上传数据、不估算金额，按需只读查询数据库和本地 `events.jsonl`。
+A local, read-only GitHub Copilot CLI token usage dashboard. Inspect sessions, model usage,
+individual requests, and recorded conversations without uploading data or estimating costs.
+The database and local `events.jsonl` files are queried read-only, on demand.
 
-## 安装
+## Installation
 
 ```bash
 brew install wenjun-xu/tap/tokenflow
 tokenflow start
 ```
 
-无需预先执行 `brew tap`。从 v0.2.0 起，Homebrew 下载当前 Mac 架构对应的
-**预编译独立程序**，解压后即可使用：无需安装 Python、Node.js、Bun、npm
-或数据库工具，也不在用户机器上编译。运行时和网页资源已经包含在程序内。
-v0.2.0 的 Apple Silicon 压缩包约 39 MiB；这是实际下载体积，不代表固定安装耗时。
+No prior `brew tap` is required. Starting with v0.2.0, Homebrew downloads a
+**precompiled standalone executable** for your Mac's architecture, ready to run after extraction.
+No Python, Node.js, Bun, npm, or database tools are required, and nothing is compiled on your machine.
+The runtime and web assets are included. The v0.2.0 Apple Silicon archive is approximately 39 MiB;
+this is the actual download size, not a promise of a fixed installation time.
 
-首次安装仍需获取 Homebrew tap 和程序包。预编译减少安装步骤，但不消除网络限制；
-内网必须允许访问 GitHub、其原始文件及 Release 下载地址。项目目前不提供内网镜像。
-Homebrew 自动更新等待较久时，可只对本次安装关闭自动更新：
+First-time installation still downloads the Homebrew tap and release archive. Precompilation reduces
+installation steps, not network restrictions. Internal networks must allow access to GitHub, its raw
+files, and Release download URLs; the project currently provides no internal mirror.
+If Homebrew auto-update takes too long, disable it for this installation only:
 
 ```bash
 HOMEBREW_NO_AUTO_UPDATE=1 brew install wenjun-xu/tap/tokenflow
 ```
 
-这不会跳过文件完整性校验，也不能解决代理超时。不要关闭 TLS 校验。
+This does not skip integrity verification or resolve proxy timeouts. Do not disable TLS verification.
 
-不使用 Homebrew 时，可在 [Releases](https://github.com/wenjun-xu/TokenFlow/releases)
-下载对应架构的 `tokenflow-<版本>-darwin-arm64.tar.gz`（Apple Silicon）或
-`tokenflow-<版本>-darwin-x64.tar.gz`（Intel），核对 `SHA256SUMS` 后解压，
-执行 `./tokenflow start`。请始终保留这个程序，后台服务及查询子进程需要它。
-macOS 如果拒绝打开下载的程序，请核对来源并按系统提示处理，不要关闭 Gatekeeper。
+Without Homebrew, download `tokenflow-<version>-darwin-arm64.tar.gz` (Apple Silicon) or
+`tokenflow-<version>-darwin-x64.tar.gz` (Intel) from
+[Releases](https://github.com/wenjun-xu/TokenFlow/releases), verify `SHA256SUMS`,
+extract it, and run `./tokenflow start`. Keep the executable: the background service and query
+subprocesses need it. If macOS refuses to open the download, verify its source and follow the
+system instructions rather than disabling Gatekeeper.
 
-已安装用户升级到 v0.2.2：
+To upgrade an existing installation to v0.2.3:
 
 ```bash
 tokenflow stop
@@ -41,7 +45,9 @@ tokenflow --version
 tokenflow start
 ```
 
-## 使用
+## Usage
+
+The home page uses a light-gray background, compact overview, and approximately 38% / 62% split: actual usage trends and a Top 5 share pie chart on the left, and a ten-column session table on the right. On narrow screens, trend, share, and details stack in that order; the table scrolls horizontally on its own. “Today / Last 7 days / Last 30 days” synchronizes all statistics using the service's local time zone, with hourly buckets today and daily buckets for recent periods; missing metrics remain gaps. The details table has no search, filter, sortable-header, or export controls, retaining view actions, page size, and pagination. This layout supersedes the older home filter bar, doughnut chart, four cards, and empty-state description; read-only sources and detail features remain unchanged. Later usage notes below describe subsequent layout and chart refinements.
 
 ```bash
 tokenflow start
@@ -52,103 +58,117 @@ tokenflow --help
 tokenflow --version
 ```
 
-默认数据库为 `~/.copilot/session-store.db`。启动后打开浏览器，或在终端输出可手动打开的地址。
-该地址含临时访问凭证，不要分享。关闭终端不会停止服务；重复启动复用当前用户的同一实例。
-切换数据库前需要停止已有实例。
+The default database is `~/.copilot/session-store.db`. Startup opens a browser or prints a URL
+you can open manually. The URL contains a temporary access credential: do not share it.
+Closing the terminal does not stop the service; repeated starts reuse the current user's instance.
+Stop the existing instance before switching databases.
 
-页面按请求时间和服务启动时的系统本地时区筛选年、月、日，修改系统时区后需重启。
-页面时间统一显示为系统本地时间 `YYYY-MM-DD HH:mm:ss`，数据库原始时间保持不变。
-轮次列表按最近调用时间倒序，单轮请求明细和弹窗全会话记录按时间倒序分页；
-排序保留原始小数秒精度，无效时间放在末尾。
-首页会话列表和详情页列表最前面显示序号，分页列表跨页连续编号，与原始请求 ID 无关。
-列表高度不超过 32rem 或窗口高度的 65%，超出时在列表内滚动，表头固定；也可用 Tab 聚焦列表后使用方向键滚动。
-首页、详情页及弹窗采用蓝青色科技风，并适配系统浅色模式。弹窗高度不超过 30rem 或窗口高度的 65%，内容超出时内部滚动。
-总 Token 为输入加输出，缓存读取单列展示；缺失指标显示未知，空集合显示零。
-请求耗时和首 Token 延迟按毫秒原样展示，允许小数，不截断为整数；Token 数和轮次序号仍要求整数。
-会话详情将同一原始轮次的调用合并为一行，展示调用次数、累计 Token、首次/最后调用时间和涉及模型。
-先按当前日期范围内全部调用汇总再分页，每页 10 轮；不是将某一页请求局部合并。
-点击轮次进入该轮的调用列表，每页 10 次调用；通过折线图悬浮提示中的详情入口读取该次模型输出及工具信息，不用整轮对话代替单次详情。
-返回轮次列表保留日期和轮次页码，返回会话列表保留原筛选状态。
-单轮详情提供输入、输出、缓存读取三条 Token 折线，横轴按调用先后排列，纵轴为单次调用用量，不是累计值。
-图表覆盖当前日期范围内本轮的全部调用，不受列表分页影响；悬停或 Tab 聚焦显示时间、模型和准确数值。
-NULL 保留为断点，不补零；异常时间的调用放在末尾显示独立点，并明确提示顺序未确定。
-折线采用内嵌 SVG，无图表依赖或外部资源；大整数仅在像素比例上缩放，原始数值在提示中保持精确。
-序号 0 保留为第 0 轮，NULL 单独显示“未记录轮次”，不猜测其归属。分组依据数据库原始序号，不证明官方对话关联。
-轮次汇总 Token 是各次调用用量之和，不对重复输入上下文去重；缺失指标显示未知。
-无效时间不参与首次/最后有效调用时间计算，全部时间下其调用仍计入统计。
-首页每 15 秒自动更新，后台及操作时暂停；轮次概览和单轮页面不自动轮询。
-详情、日期筛选、分页和返回列表通过首页的导航查询参数保留状态；JS/CSS 资源仍不接受查询参数，
-所有数据接口仍要求临时访问凭证。
-模型请求明细支持点击每一行打开详情弹窗，也可通过 Enter 或空格打开、Esc 或点击弹窗外空白处关闭；
-行详情弹窗不放置按钮，不重复列表已有的请求指标，可展开查看本次模型输出、工具参数、结果和执行状态。
-全会话记录中的每轮内容，以及单次弹窗的输入、输出和工具详情默认折叠，点击标题展开；错误提示保持可见。
-工具折叠标题附带简短参数摘要，例如加载的 skill、查看的文件和行号、搜索标识或命令类型。
-摘要不生成推测性解释；长内容省略，命令仅显示已知命令名及固定子命令，不显示任意参数、环境变量、请求头或 URL 凭证。
-一轮对话中的多次模型请求分别展示各自内容；仅返回工具指令、没有文字回复也是正常输出。
-工具名称、参数、结果和状态来自数据库同级 `session-state/<会话 ID>/events.jsonl`，
-数据库没有 `apiCallId` 外键，因此仅在同会话、同 Agent、同一秒的时间、模型和输入/输出/缓存/耗时/结束原因等指标
-在数据库和日志中均唯一时关联，再通过日志 `apiCallId` 定位模型输出、`toolCallId` 定位该次工具执行。
-不按轮次序号、最近时间或记录顺序猜测；跨秒、指标缺失、多个候选或日志缺失均明确提示，不降级成整轮内容。
-单次详情不依赖 `turns` 已写入，因此不会因整轮对话延迟补写而遗漏已有调用输出。
-只有明确调用 ID 关联的日志保存了完整输入时才显示输入，否则提示未记录，不把原用户消息冒充模型完整输入。
-本次工具参数和结果展开后完整展示；尚未返回的结果标为待记录，失败标为失败，不虚构成功结果。
-日志只在原有文件写入隔离进程中读取，拒绝符号链接及非当前用户文件；单次最多扫描 128 MiB，仅展示完整写入的 JSONL 记录。
-“全会话记录”入口在弹窗内展示全部已记录对话，独立于日期筛选；无模型请求的会话也保留该入口。
-全会话记录来自 `turns`，可能晚于即时日志补写；其中工具过程仍按唯一用户消息和 `interactionId` 展示同轮主会话工具，不代表某一次模型调用。
-轮次列表仅预加载最多 240 字符的用户消息摘要，不预加载完整对话或工具正文；弹窗打开后通过只读隔离查询加载完整内容。轮次接口为
-`/api/sessions/<会话 ID>/rounds`，`roundPage` 用于轮次分页，
-`round=<原始序号>` 或 `round=missing` 加 `requestPage` 用于单轮调用列表。新单次接口为
-`/api/sessions/<会话 ID>/requests/<请求 ID>/call`，不接受查询参数；原有 API 保留 400 字符预览和 `full=1`。
-首页用一个紧凑模块承载日期筛选和用量：筛选在上方，当前范围在右侧，四项 Token 统计在下方统一采用“标签在上、数值在下”的布局，依次为输入、输出、缓存读取、总 Token。不显示刷新按钮、品牌文案、顶部会话数或模型调用次数及底部公式／停止服务提示；列表中的调用次数和分页总条数不变。年、月、日仍逐级启用并按实际月份生成日期；提交或重置日期条件时重新开始列表分页。窄屏统计为两列，日期筛选按三列排列。
-首页可见时每 15 秒自动读取当前筛选和分页范围，不刷新文档或新增浏览器历史；更新用量及列表，保留未提交的筛选内容、列表横向／纵向滚动和页面位置，并补充新出现的年份选项。控件或列表获得键盘焦点、正在选择文字时暂缓更新；切到后台暂停轮询，回到前台立即尝试更新。请求不会重叠，失败保留旧数据并明确提示过期及最近成功读取时间，后续自动重试。轮次概览和单轮页面不自动刷新，避免打断图表、工具及对话操作。正常零值诊断及读取状态不占视觉空间，非零诊断和错误仍明确展示；数据源、时区及最近成功读取时间可悬停当前统计范围查看。
-轮次概览采用独立紧凑布局：摘要在顶部左对齐，工作目录、会话 ID 和四项 Token 汇总合并为一个资料／用量模块，依次展示输入、输出、缓存读取、总 Token，顶部不再重复展示模型调用次数，列表中的调用次数保留。资料与统计采用一致的标签、数值字号、字重和间距，不显示返回文字或创建／更新时间。摘要和资料均移除复制按钮；长字段省略显示但保留完整悬停文本。桌面正常数据时摘要及资料／用量模块约 120px，完整轮次折线图约 260px，列表占用剩余高度，表头固定。窄屏字段和统计自动换行，列表仍在独立区域滚动。首页采用相同的四项 Token 顺序。
-概览接口的 `round_trend` 包含当前日期筛选范围的全部轮次，按首次调用时间及精确轮次序号排序；列表则按最近调用倒序，每页最多 10 轮，依次展示轮次、调用次数、总 Token、模型、对话摘要。对话摘要位于最后一列，仅显示一行，超出宽度用省略号，悬停保留完整预览；单轮调用明细的操作摘要仍维持原有两行样式。每轮摘要仅在同一会话、同一实际轮次有唯一 `turns` 记录时显示，未记录或重复记录明确提示，不做偏移推测。图中每个点表示这一轮的输入、输出和缓存读取汇总，横轴显示真实轮次序号；未记录序号的请求只保留在汇总及列表中，不猜测曲线位置，时间异常的已知轮次放在末尾作为独立点。纵轴固定、完整横轴可左右滑动，右上角图例与单轮页面一致。悬浮只显示轮次、模型调用次数和用户消息预览，并提供“查看本轮详情”；点击列表行也可进入相同详情。
-概览翻页复用单轮页面的局部更新机制，只更新列表和分页，不重建顶部统计或折线图；成功后替换当前 URL，不新增浏览器历史记录。全会话记录及日期范围恢复入口放在轮次列表标题旁，不占用顶部资料区；返回会话列表使用浏览器后退。模型请求原始接口仍为每页 50 条，只有轮次概览和单轮调用列表使用每页 10 条。
-单轮折线图先展示全部调用的输入、输出和缓存走势，再通过
-`/api/sessions/<会话 ID>/rounds/activities?round=<原始序号>` 一次读取整轮安全操作摘要（支持同样的日期筛选）。
-悬停或聚焦仅显示调用序号和本次 skill／工具操作摘要，不展示内部请求 ID，也不重复展示时间、模型、Token、相邻差值或统计说明；skill 不再重复列出，通用参数占位说明省略。工具成功时不重复显示“成功”，失败、待完成和未知状态仍明确展示，列表及工具展开标题采用同样规则。读取失败或无法关联仍明确提示。悬浮卡片右上角的“查看单次调用详情”按钮打开弹窗，点击图点不再打开详情。键盘聚焦图点后，Enter 或空格仅聚焦该按钮，再激活按钮进入详情；下方调用列表仍可直接打开详情。
-工具摘要不返回完整参数、正文或结果；加载中、确认没有工具、无法关联和读取失败分别提示。
-走势模块仅展示折线图，操作摘要仅在图内悬停或聚焦时浮现，离开图表或按 Esc 隐藏；不显示曲线开关或峰值控件，缺失值不补零。
-横轴完整标出每次调用的序号，从 1 到最新；调用较多时横向滚动，保证序号不重叠。左侧 Token 纵轴独立固定，不随曲线左右滑动。右上角静态图例以对应颜色和短线说明输入、输出、缓存读取，线型与曲线一致；不显示图表标题或横轴顺序说明。调用列表保持最新在前，序号从当前筛选范围总次数递减到 1，分页继续递减。
-单轮页面保留轮次标题、折线图、右侧本轮对话及调用列表；标题不显示默认“全部时间”，筛选日期时仍附统计范围。不展示顶部 Token 汇总、返回按钮、会话资料、额外时间导航、全会话入口或页脚说明；正常零值诊断不占空间。
-右侧对话栏通过整轮首个请求的既有 `view=matched&full=1` 接口读取唯一同轮用户消息与助手回复，不随调用列表分页改变，也不受 Token 日期筛选裁切。正文及“工具调用”默认折叠；首次展开工具调用后才通过既有同轮工具接口读取完整分页，合并为按次数排序的紧凑统计行：同名工具合并，skill 按名称分别统计，每项只预览至多两种安全操作摘要，失败和待完成数量单独保留。不展示逐个工具卡片、时间、ID、完整参数或结果；完整单次内容仍从折线图悬浮按钮或列表进入。工具次数不代表逐工具 Token 用量，结果通常进入后续上下文。没有记录、重复轮次或无法唯一关联时明确提示，不使用其他轮次补位。图表左侧采用较小内边距和固定刻度宽度，为右侧对话栏留出更多空间；侧栏高度固定，标题不参与滚动，只有其下方内容滚动。窄屏时侧栏移至折线图下方。
-悬浮信息靠近当前指针，上方居中优先；空间不足时翻到下方或侧方并限制在屏幕内。键盘聚焦以实际曲线点为锚点，不再使用整列热区底边定位；同次悬停内保持位置稳定，便于进入摘要中的链接与折叠项。
-单轮列表依次展示序号、模型、输入、输出、总 Token、缓存读取、调用摘要，不展示 ID、时间、耗时或首 Token 延迟。每页最多 10 次调用，折线图仍展示完整轮次，调用较多时左右滚动；原始模型请求接口的分页大小不变。单轮上一页／下一页只更新调用列表和分页导航，不刷新文档、折线图或右侧对话；保留曲线左右滚动位置、对话展开状态和栏内滚动位置。成功后用 `replaceState` 更新当前 URL，不新增浏览器历史记录；无论翻过几页，浏览器后退都直接返回进入本轮详情之前的页面，前进仍可回到当前轮次的最后分页。Ctrl／Cmd 等修饰点击仍保留原生新标签页行为。摘要继续复用首次加载的整轮结果，翻页不重新读取摘要或对话。超时和读取失败明确提示并可重试，保留旧页数据；后续翻页取消之前未完成的请求，不允许旧响应覆盖新页。摘要最多预览三种操作，其余通过单次详情查看，加载中、读取失败及无法关联分别提示。原始 ID 仍内部用于精确打开对应调用，不通过模型名称或序号猜测。标题及图表采用紧凑高度，列表在同一视口下保持固定高度，末页不会因调用较少而收缩；桌面占用剩余视口高度，窄屏或低窗口为 24rem。整行表头固定，只有内容滚动，多页时才显示分页。加载状态对辅助技术保留，非零异常仍明确提示。可通过浏览器后退返回轮次概览，全会话记录仍可从概览页进入。
-这些是本次模型输出发起的关联操作，不是逐工具 Token 分摊；工具返回通常进入后续调用的输入，
-大多数日志未保存完整模型输入，不能推断哪个 skill 或工具精确消耗多少 Token。缓存读取单列，不重复加入总量或作为节省量扣除。
+The home page offers “Today,” “Last 7 days,” and “Custom,” defaulting to today. Today uses the OS local time zone captured when the service starts, not the browser's date. “Custom” opens a native modal dialog with a single row of native year, month, and day dropdowns, no longer separate start/end rows. Month and day both offer “All”: all months selects the whole year and fixes day to All; a selected month with all days selects the whole month; specifying all three selects one day. Months and days update together, correctly handling month lengths and leap years and excluding future dates. “Apply” closes the dialog and updates data; “Cancel,” “Close,” or Esc dismisses it without changing the applied range and returns focus to “Custom.” Invalid dates have explicit in-dialog messages. Date changes fetch and update data without reloading the page; old data stays visible while loading. Success updates the URL and resets to page one, preserving repository, model, sort order, and page size. Rapid changes cancel old requests and apply only the latest result; failures retain old data and the applied range with a clear error. Date controls are not rebuilt; automatic refresh pauses while the dialog is open, preserving uncommitted edits and “All” selections. Pagination and returns from details preserve the applied range. Restart after changing the system time zone; existing date-range and last-30-days URL/API parameters remain compatible. Home-page session summaries use the same 12px font size as other table content.
+All page timestamps use system local time in `YYYY-MM-DD HH:mm:ss` format; original database values remain unchanged.
+Turn lists paginate by original numeric turn index descending, while turn trends retain numeric ascending order. Individual-turn requests and whole-session records in dialogs paginate by time descending.
+Sorting preserves original fractional-second precision, placing invalid timestamps last.
+Home defaults to latest-call time descending. Headers show column names only, without sort buttons or triangles; existing URL and API sort parameters remain compatible.
+Sorting is computed over every matching session before pagination. Unknown total tokens and missing valid request times remain last in their respective sorts, in either direction. Equal totals use latest-call time descending then session ID for stable ordering; equal request times use session ID.
+Changing date, repository, model, or sort resets to page one. Reset restores today and clears repository/model filters while retaining applied sorting. Pagination, details-and-back navigation, and automatic home updates also preserve filters and sorting.
+Home and detail lists begin with sequence numbers; paginated lists number continuously across pages, independently of original request IDs.
+The home session table shows session summary, project, total tokens, call count, actual models, latest request in range, and view action in that order. Session ID, input, and output columns are removed without changing totals, sorting, filtering, or detail data.
+Column widths are allocated explicitly: summaries take remaining space, while project, time, model, and numeric columns stay stable. Time and numbers stay on one line; numbers align right and total tokens are bold cyan.
+Overflowing summaries, projects, and model names use ellipses with complete hover text; underlying text and exact numbers are not truncated. The minimum table width is 1080px, avoiding horizontal scrolling at typical desktop widths. Narrow windows scroll only within the list; expanded metadata may wrap without forcing times or token counts onto multiple lines.
+List height is capped at 32rem or 65% of the viewport; excess rows scroll internally beneath a sticky header. Tab can focus the list for arrow-key scrolling.
+Home, detail pages, and dialogs use a restrained data-console style: near-black base, layered panels, cyan key values and query buttons, and local monospace fonts for numbers and tool content. No remote fonts, decorative animations, or glows. System light mode, visible keyboard focus, and subtle hover feedback are retained. Total tokens are emphasized first on home and session overviews by metric identity, not card position. Dialog height is capped at 30rem or 65% of the viewport, with internal overflow scrolling.
+Total tokens equal input plus output; cache reads are displayed separately. Missing metrics show unknown; empty sets show zero.
+Request duration and time to first token are displayed as recorded in milliseconds, allowing fractions without integer truncation; token counts and turn indices still require integers.
+Session details combine calls with the same original turn index into one row showing call count, aggregate tokens, first/last call time, and models.
+Aggregate all calls in the current date range before pagination, at 10 turns per page; do not merge only requests on one page.
+Neither whole turn rows nor turn names navigate on click. Only the “Call details” action opens that turn's call-list dialog on the current page, at 10 calls per page. “View” switches within that same dialog to one call's model output and tools, without stacking a second dialog or substituting the whole conversation.
+Returning to turns preserves the date and turn page; returning to sessions preserves the original filters.
+Session overviews show three token lines—input, output, cache reads—with turns on the horizontal axis and aggregated per-turn usage vertically. Call details show only the individual-call list, without a repeated line chart.
+Overview charts cover every recorded-index turn in the current range, independently of list pagination. Hover or Tab focus reveals that turn's conversation, and accessible point labels retain exact values.
+NULL remains a gap, not zero. Calls with anomalous timestamps appear last as separate points with an explicit unknown-order message.
+Charts use embedded SVG, with no chart dependency or external resources. Large integers are scaled only for pixels; tooltip values remain exact.
+Index 0 remains turn 0; NULL appears separately as “Turn not recorded,” without guessed attribution. Grouping uses original database indices and does not prove official conversation associations.
+Turn token totals sum call usage without deduplicating repeated input context; missing metrics show unknown.
+Invalid timestamps do not contribute to first/last valid call times, but their calls still count in all-time statistics.
+Home automatically updates every 15 seconds, pausing in the background and during interaction; turn overviews and single-turn pages do not poll.
+Details, date filters, pagination, and returns preserve state through home navigation query parameters. JS/CSS assets still reject query parameters,
+and every data API still requires the temporary access credential.
+Single-turn call details switch to individual details only through “View,” operable with Tab and Enter/Space; original model-request lists still support whole-row click or keyboard opening. Esc or clicking outside dismisses dialogs, and the turn-call dialog also has “Close.”
+Individual details do not repeat request metrics already in the list. Expand model output, tool parameters, results, and execution status as needed. “Back to call list” preserves page, loaded summaries, and scroll position; standalone detail dialogs opened from original request rows still have no buttons.
+Each turn's content in whole-session records, and input, output, and tool details in individual dialogs, are collapsed by default and expand by clicking headings; errors remain visible.
+Tool headings include short argument summaries, such as the loaded skill, viewed file and lines, search identifier, or command type.
+Summaries do not invent explanations. Long text is abbreviated; commands show only known command names and fixed subcommands, not arbitrary arguments, environment variables, headers, or URL credentials.
+Multiple model requests in one conversation turn display their own content separately; tool instructions without a textual reply are normal output.
+Tool names, arguments, results, and status come from `session-state/<session-id>/events.jsonl` beside the database.
+The database has no `apiCallId` foreign key. Association requires the same session, agent, timestamp second, model, and input/output/cache/duration/finish-reason metrics
+to be unique in both database and log; then log `apiCallId` identifies model output and `toolCallId` identifies the corresponding execution.
+Do not guess using turn indices, nearest time, or record order. Cross-second matches, missing metrics, multiple candidates, or missing logs produce explicit messages, never a fallback to whole-turn content.
+Individual details do not require an existing `turns` row, so delayed conversation writes do not hide already logged call output.
+Input is shown only when a log explicitly associated by call ID contains complete input; otherwise it is marked not recorded. Original user messages are not presented as complete model input.
+Expanded tool arguments and results are shown in full. Results not yet returned are pending recording; failures are marked failed, without invented success results.
+Logs are read only in the existing file-write-isolated process. Symlinks and files not owned by the current user are rejected; each scan is capped at 128 MiB and only complete JSONL records are displayed.
+“Whole-session records” opens all recorded conversation in a dialog independently of date filters; sessions without model requests retain this entry point.
+Whole-session records come from `turns` and may lag live logs. Tools use an explicit `interactionId` located by the user message, not an individual model call. When the original message and runtime-added `steering` messages share an interaction, shared main-session tools may be shown with a clear warning that they were not necessarily triggered only by this message; the assistant reply from a steering message's turn is not borrowed. Identical user messages in different interactions remain ambiguous. Tools deduplicate by `toolCallId`: identical repeats count once, conflicting records refuse association. Tool starts retain the explicit model-turn/interaction association present at that time, preventing reused `turnId` values during session restoration from mixing incomplete tools from another interaction.
+Turn lists preload only user-message summaries of up to 240 characters, not full conversations or tools. Full content loads through an isolated read-only query on first chart-point hover or detail opening. The turn API is
+`/api/sessions/<session-id>/rounds`; `roundPage` paginates turns,
+and `round=<original-index>` or `round=missing`, with `requestPage`, selects a turn's call list. The new individual-call API is
+`/api/sessions/<session-id>/requests/<request-id>/call`, with no query parameters; existing APIs retain 400-character previews and `full=1`.
+Each turn occupies a fixed 64px chart slot, with its point centered: one turn takes one slot, two take two, without stretching to fill available width. The module remains full-width. Background grids fill the available plotting area and align with left-axis ticks without scrolling with data. When necessary, data scrolls horizontally while the left token axis stays fixed.
+Home now places “Today / Last 7 days / Custom” plus total, input, and output statistics at the top. Usage trend and an all-session usage bar chart appear on the left, with independently scrollable session details on the right. The bar chart replaces the Top 5 pie, no longer limiting results to five sessions. Modules stack on narrow screens while the bar chart remains horizontally scrollable. No matching sessions produces an explicit empty state; nonzero diagnostics and read errors remain visible.
+Repositories match the complete recorded `repository` exactly; models match actual call `model` exactly, without inferred families. Combined with dates, both constrain lists, totals, trends, and all-session bars. Model filters sum only matching calls' tokens, cache, counts, and latest request time, not other-model usage in those sessions. The API retains sorted, deduplicated repository and actual-model options within the range. Changing time returns to page one while preserving repository, model, and sorting parameters; pagination and returns home preserve filters. In session details, repository/model are saved only as return state; details show all models for that session within the date range.
+The session usage bar chart shows every session matching current date, repository, and model filters, in the same sort order as the right-hand list, not independently re-ranked by usage. It includes all results regardless of list page or page size. Each session occupies 48px: a 34px bar plus 14px spacing, with horizontal overflow only. The left token axis and five tick levels stay fixed; grid and bars share one scale. Session summaries are angled along the horizontal axis, long summaries abbreviated, with no token labels on bars. Full summary, session ID, project, and exact usage remain in native hover text and accessible labels. Clicking a bar or angled summary, or pressing Enter, opens details while preserving date and home-filter return state. Zero and unknown totals remain represented; unknown is labeled “Unknown,” not replaced with zero, and negative bars extend below the zero baseline. Heights use exact integer calculations with a 1px marker for tiny nonzero values. Axis ticks use compact units or scientific notation for huge numbers; hover values remain exact. Native SVG and external CSS add no dependencies. `/api/dashboard` returns `session_usage` in the same snapshot, including all matching session IDs, summaries, projects, and in-range usage. Original Top 5 API fields remain for existing clients but are no longer used on home.
+On the first home load without an explicit range, `/api/dashboard?date=today` reads the service's local today. Success writes year/month/day to the URL and synchronizes list, totals, trend, and bars to that day without first showing all-time data. The API supports hierarchical `year`, `month`, `day`, `start/end` date ranges, and undated all-time queries, plus mutually exclusive `date=today|last7|last30`. It returns service-local `today` and rejects future year/month/day ranges. Existing `year=` all-time URLs remain compatible. Statistics use the OS local time zone captured at service startup; restart after changing it.
+While visible, home reads the applied range, repository, model, sort, and pagination every 15 seconds without reloading the document or adding browser history. Totals, trend, all-session bars, and list update together while preserving unsubmitted date choices, bar-chart horizontal position, list scroll, and page position. Updates pause when the date dialog is open, controls or lists have keyboard focus, or text is being selected. Polling pauses in the background and attempts an immediate update on return. Failures retain old data, show staleness and the latest successful read time, and retry later. Turn overviews and single-turn pages do not auto-refresh. Normal zero diagnostics and read status consume no visual space; nonzero diagnostics and errors remain explicit.
+Turn overviews use a separate compact layout: a top-left summary, then one metadata/usage module combining working directory, session ID, and four metrics ordered total, input, output, cache reads. Model call count is no longer repeated at the top, but remains in lists. Metadata and statistics share spacing and labels; total tokens use a slightly larger cyan monospace value while other values stay compact. No back text or creation/update times. Copy buttons are removed from summary and metadata; long fields use ellipses with full hover text. With normal desktop data, summary plus metadata/usage occupy about 120px and the full turn chart about 260px. Turn and single-turn call lists default to 24rem, capped at 50% of the viewport and shrinking further when desktop space is tight. Sticky headers and internal vertical scrolling prevent loaded rows from lengthening the page. Fields and statistics wrap on narrow screens while lists keep independent scrolling. Home uses the same four-metric order.
+The overview API's `round_trend` includes every turn within the date range, sorted by exact numeric turn index ascending. Lists sort descending at no more than 10 turns per page: newest first, turn 0 last among recorded turns. Columns are turn, call count, total tokens, models, conversation summary, and actions. Conversation summary precedes actions, takes one line with ellipses, and retains the full preview on hover; single-turn operation summaries retain their existing two-line style. A turn summary requires exactly one `turns` row for the same session and actual turn. Missing or duplicate records have explicit messages, without guessed offsets. Each point represents that turn's aggregate input, output, and cache reads, with actual turn indices on the horizontal axis. Requests missing indices remain only in totals and at the end of lists; no inferred curve position or fabricated missing turns. Known-index turns with anomalous time still sort by index and appear as separate points. The vertical axis stays fixed; the full horizontal axis scrolls, and the top-right legend matches the single-turn page.
+Home usage trends show input (cyan solid), output (blue dashed), and cache reads (purple dotted), with matching legend colors and line styles. A blue gradient fills below input so fill remains visible when output is near zero. There is no token-type filter; hover shows only time and the three exact metrics, not sessions or session links, and closes immediately when leaving a point. Detail turn charts likewise use cyan input, blue output, purple cache reads, and blue input-area fill visible even when output is zero. Missing or anomalous data remains disconnected. Charts allow native horizontal scrolling only, not internal vertical scrolling. More data expands plot width; touch and left/right keyboard scrolling are supported, every point is retained, and scrolling hides tooltips anchored to old positions.
+Turn-chart hover cards show the turn's conversation directly, without a “View turn details” button or splitting it into individual model calls. Cards show turn, call count, deduplicated model names, and user/assistant previews collapsed by default; headings expand full content, with explicit messages for unrecorded replies. Only first hover queries the unique same-turn conversation via `round_trend.request_id`; this identifier is query-only and is not displayed as an individual call. Missing/duplicate conversations are explicit. Main-session tools are collapsed; first deliberate expansion reads every tool page, showing each execution's name, operation summary, expandable full arguments/results, and failed/pending/unknown status. Shared interactions are marked, and subagent internal calls are excluded. Cards appear only over turn dots. Leaving a dot starts a 250ms close delay, allowing crossing the gap into the card to read, scroll, or expand. Leaving both dot and card closes it even if the pointer remains in blank chart space. Entering another turn dot shows its content. The same hover and asynchronous loading preserve position and expansion state; switching turns or reopening after closing resets all content to collapsed, reusing page-cached content/tools but not expansion state. Tab focus shows the card; Enter/Space moves inside for scrolling, expansion, and text selection; Esc closes. With date filters, call counts/models use the current range, while conversation/tools are not date-clipped and shared-interaction scope is explained separately. Only “Call details” in the lower turn list opens the call-list dialog.
+Turn overviews and single-turn call pages remove bottom “Previous/Next” controls. Manually reaching a scroll edge loads adjacent pages on demand, at most 10 records per load, supporting wheel, touch, scrollbar dragging, and keyboard. Downward loads append older records; upward loads prepend newer records. Loaded pages stay in the same list; prepending compensates height to preserve the original row position, without rebuilding lists, top totals, or charts. Horizontal scrolling never triggers pagination. Only one page loads at a time; failure retains all rows and shows Retry. Success replaces the list page in the current URL, preserving dates and return state without new history; call-list dialogs retain their original pagination. Whole-session records and restore-range actions sit beside the turn-list heading, not in top metadata. Return to sessions uses browser Back. Original model-request APIs remain at 50 per page; only turn overviews and single-turn call lists use 10.
+The call-list dialog is lightweight: turn title, “Close,” in-range call count, and whole-turn total tokens at the top, without a chart, whole-turn conversation panel, or usage cards. Date-filtered titles retain the statistical range; the default “All time” label is omitted. Totals include every call in that turn and date range, not only the page. Width is capped at 72rem and stays within narrow viewports; the table scrolls independently in both directions. Opening, switching, and closing do not change the page URL/history or rebuild underlying charts/lists, preserving filters, page, and scroll. Closing returns focus to the trigger.
+The page reads safe summaries for the whole turn once through `/api/sessions/<session-id>/rounds/activities?round=<original-index>`, supporting the same date filters and independent of chart loading. Summaries appear in corresponding call rows. Successful tools do not repeat “Success”; failed, pending, and unknown states remain explicit. Read failures preserve lists/token values and show an error plus “Reload summaries”; no tools, unlinked calls, and missing requests each have distinct messages.
+Tool summaries do not return full arguments, content, or results. Loading, confirmed no tools, association failures, and read failures have distinct messages.
+Hover information stays near the pointer, preferably centered above it, flipping below or beside when needed and staying within the screen. Keyboard focus anchors to the actual curve point, not the bottom of a whole-column hit area. Position remains stable within one hover to allow entering links and expandable items.
+Single-turn lists show sequence number, model, input, output, cache reads, total tokens, operation summary, and “View,” not ID, time, duration, or first-token latency. Calls stay newest-first; numbering descends from the filtered total to 1 across pages. Each page contains at most 10 calls without changing original model-request API page sizes. Only “View” switches to individual details in the same dialog; rows no longer open on click. Input, model output, tool parameters, and results start collapsed; missing complete input is explicit, not replaced with a user message. “Back to call list” reuses loaded pages/summaries without rereading and restores focus to the original “View.” Previous/Next buttons update only list and pagination, not the page URL, retaining title and totals. Timeouts/read failures are clear and retryable while old page data remains. Later pagination cancels unfinished requests so stale responses cannot overwrite newer pages; returning cancels detail loading; closing cancels list, pagination, summaries, and detail requests. Summaries preview at most three operation types; other operations are available in details. Loading, read failure, and association failure remain distinct. Original IDs are internal exact call anchors; never infer using model names or displayed numbers. List height is the smaller of 24rem and 40% of the viewport, without shrinking on a short last page. Headers stay fixed and only content scrolls; pagination appears only for multiple pages. Loading remains available to assistive technology, and nonzero anomalies are explicit. Whole-session records remain accessible from the overview.
+Direct URLs with `round=<index>` or `round=missing` remain compatible with lightweight call-list pages, preserving `replaceState` pagination and native modified clicks; overview “Call details” no longer navigates there.
+These are actions initiated by this model output, not per-tool token allocation. Tool results generally enter subsequent calls' input.
+Most logs do not contain complete model input, so exact token consumption by a skill or tool cannot be inferred. Cache reads are separate, neither added again nor subtracted as savings.
 
-升级、卸载或从 v0.1.0 Python 版本迁移前，先停止后台服务：
+Before upgrading, uninstalling, or migrating from v0.1.0 Python, stop the background service:
 
 ```bash
 tokenflow stop
 brew upgrade wenjun-xu/tap/tokenflow
-# 或 brew uninstall tokenflow
+# Or brew uninstall tokenflow
 ```
 
-状态及安全诊断仅写入 `~/Library/Application Support/TokenFlow/`，
-目录权限 0700、文件权限 0600；不写入 Copilot 数据目录。
+State and security diagnostics are written only to `~/Library/Application Support/TokenFlow/`,
+with directory mode 0700 and file mode 0600, never to Copilot's data directory.
 
-## 支持与安全边界
+## Support and Security Boundaries
 
-- macOS 14 或以上；提供 Apple Silicon 和 Intel 程序包。Apple Silicon 和 Rosetta 下的
-  x64 独立程序已做本机合成数据检查；原生 Intel Mac 及其他 macOS 版本仍待验收。
-  x64 隔离查询关闭 JIT，以避免 Rosetta 与文件写入隔离的兼容问题，不放宽只读保护；
-  大数据量性能需另行测量。
-- v0.2.0 是独立程序迁移预发布；旧 v0.1.0 的源码包和版本标签保留。
-- v0.2.1 修复首 Token 延迟等耗时字段保存小数时无法启动的问题，仍为预发布版本。
-- v0.2.2 增加单次调用与工具详情、完整轮次折线图、紧凑页面布局及首页自动更新，仍为预发布版本。
-- 参考 Copilot Schema 8，按实际必需表和字段检查兼容性。不读取、修复或迁移源库。
-- SQLite 查询在 `/usr/bin/sandbox-exec` 禁止文件写入的隔离子进程中执行。
-  接口已被系统弃用；不可用或隔离探针失败时明确拒绝读取，不提供不安全降级。
-- 不忽略活动 WAL，不创建或重建源库 WAL/SHM；只读访问无法完成时明确报错。
-- HTTP 仅监听 `127.0.0.1`，校验访问密钥、Host、Origin 和跨站请求。
-  无 HTTP 停止接口、外部 CDN 或遥测；不保证隔离同一 OS 用户的恶意程序。
-- 不承诺未经实测的安装速度、其他 macOS 兼容性或数据规模上限。
-- 源码公开，许可证尚未确定；请勿把公开仓库等同于已授予任意使用或再分发许可。
+- macOS 14 or later, with Apple Silicon and Intel packages. Apple Silicon and the x64 standalone
+  executable under Rosetta have been checked locally with synthetic data; native Intel Macs and
+  other macOS versions still await acceptance. x64 isolated queries disable JIT to avoid Rosetta
+  compatibility problems with file-write isolation, without weakening read-only protection.
+  Large-data performance requires separate measurement.
+- v0.2.0 is the standalone-executable migration prerelease; old v0.1.0 source packages and tags remain.
+- v0.2.1 fixes startup failures when duration fields such as first-token latency contain fractions; it remains a prerelease.
+- v0.2.2 adds individual-call/tool details, full turn line charts, compact layouts, and automatic home updates; it remains a prerelease.
+- v0.2.3 provides an English interface and documentation, refined date filtering, all-session usage bars ordered like the session list, and bounded scrollable detail lists with visible blue chart gradients; it remains a prerelease.
+- Copilot Schema 8 is the reference; compatibility is checked against actual required tables and fields. No source repair or migration operations are performed.
+- SQLite queries run in a subprocess where `/usr/bin/sandbox-exec` prohibits file writes.
+  This OS interface is deprecated. If unavailable or its isolation probe fails, reads are explicitly
+  refused, with no unsafe fallback.
+- Active WAL data is not ignored and source WAL/SHM files are not created or rebuilt; failed read-only access produces a clear error.
+- HTTP binds only to `127.0.0.1`, validating the access key, Host, Origin, and cross-site requests.
+  No HTTP shutdown API, external CDN, or telemetry. Isolation from malicious programs running
+  as the same OS user is not guaranteed.
+- No unmeasured installation-speed, other-macOS compatibility, or maximum-scale promises.
+- Source is public, but a license has not yet been selected. A public repository does not imply permission for unrestricted use or redistribution.
 
-## 本地开发
+## Local Development
 
-开发和构建需要 Bun 1.4.4。只有开发者安装工具和类型检查依赖，用户无需安装：
+Development and builds require Bun 1.4.4. Only developers install tooling and type-check dependencies;
+users need none:
 
 ```bash
 bun install --frozen-lockfile
@@ -159,29 +179,30 @@ bun src/cli.ts start --db "/path/to/synthetic.db"
 bun src/cli.ts stop
 ```
 
-测试仅使用合成数据库和独立状态目录，不读取真实 Copilot 会话。
-运行隔离、原生程序和后台生命周期检查需要 macOS。
+Tests use only synthetic databases and independent state directories, never real Copilot sessions.
+Isolation, native executable, and background lifecycle checks require macOS.
 
-## 发布
+## Releases
 
-在 macOS 上从待发布的源码提交构建：
+Build on macOS from the source commit being released:
 
 ```bash
 bun scripts/prepare_release.ts
-# 可指定已经下载且版本匹配的官方 Intel Bun 程序，避免构建时再次下载：
+# Optionally use an already downloaded official Intel Bun executable with a matching version:
 bun scripts/prepare_release.ts dist "/path/to/intel/bun"
-# 解压后，对实际发布程序验收（只读合成数据库，使用独立 HOME）：
+# After extraction, verify the actual release executable (read-only synthetic database, isolated HOME):
 bun scripts/verify_native.ts "/path/to/extracted/tokenflow"
 ```
 
-脚本生成两种架构的单程序归档、`SHA256SUMS`、大小记录和
-`dist/homebrew-tap/Formula/tokenflow.rb`，不自动上传：
+The script generates single-executable archives for both architectures, `SHA256SUMS`, size records,
+and `dist/homebrew-tap/Formula/tokenflow.rb`; it does not upload automatically:
 
-1. 运行类型检查、合成数据测试和独立程序验收；在支持的平台检查签名、启动、筛选及停止。
-2. 将源码提交到 `wenjun-xu/TokenFlow`，在新版本 Release 上传两份程序包和校验文件。
-   标签绑定实际源码提交，不覆盖已发布版本。
-3. 更新 `wenjun-xu/homebrew-tap` 的 formula，使下载地址和 SHA-256 精确匹配上传的程序包。
-4. 验收 `brew install wenjun-xu/tap/tokenflow` 和 `brew test wenjun-xu/tap/tokenflow`。
+1. Run type checks, synthetic tests, and standalone-executable acceptance. Check signatures, startup, filtering, and shutdown on supported platforms.
+2. Commit source to `wenjun-xu/TokenFlow` and upload both executable archives and checksums to a new version's Release.
+   Bind the tag to the actual source commit; do not overwrite published versions.
+3. Update the formula in `wenjun-xu/homebrew-tap` with URLs and SHA-256 values exactly matching the uploaded archives.
+4. Verify `brew install wenjun-xu/tap/tokenflow` and `brew test wenjun-xu/tap/tokenflow`.
 
-归档只包含 `tokenflow` 程序。不要上传 Token、数据库、状态、日志、`.publish`、
-`.joycode`、开发依赖或个人配置；GitHub 自动生成的源码包不是用户安装程序包。
+Archives contain only the `tokenflow` executable. Do not upload tokens, databases, state, logs,
+`.publish`, `.joycode`, development dependencies, or personal configuration.
+GitHub-generated source archives are not user installation packages.

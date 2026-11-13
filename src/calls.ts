@@ -30,16 +30,16 @@ function matches(event: SessionEvent, request: CallRequest): boolean {
 }
 
 const missingInput: CallDetail["input"] = { status: "missing", content: null,
-    message: "没有记录本次调用的完整输入上下文，不能用用户消息或整轮对话代替。" };
+    message: "The full input context for this Call was not recorded. A user message or an entire Round cannot substitute for it." };
 const unavailable = (status: Status, message: string): CallDetail => ({
     status, message, api_call_id: null, outputs: [], tools: [], input: missingInput, partial_tail: false,
   });
 function anchorError(sid: string, anchor: CallAnchor): CallDetail | null {
-  if (anchor.request.session_id !== sid) throw new StoreError("请求不属于该会话", 404);
+  if (anchor.request.session_id !== sid) throw new StoreError("The request does not belong to this Session", 404);
   if (anchor.candidate_count !== "1") return unavailable(anchor.candidate_count === "0" ? "missing" : "ambiguous",
-    "数据库中的时间及指标不能唯一定位本次调用，不以轮次序号或整轮内容代替。");
+    "Database timestamps and metrics do not uniquely identify this Call. A Round index or whole-Round content cannot substitute for it.");
   if (anchor.request.input_tokens === null || anchor.request.output_tokens === null || metric(anchor.request.duration_ms) === null) {
-    return unavailable("missing", "请求关键指标缺失，无法可靠关联本次模型调用。");
+    return unavailable("missing", "Required request metrics are missing; this model Call cannot be reliably linked.");
   }
   return null;
 }
@@ -81,29 +81,29 @@ function resolveCall(sid: string, anchor: CallAnchor, zone: string, log: CallLog
   const { messages, modelCalls, callIds, starts, completes } = scope;
   const candidates = scope.usages.filter(event => matches(event, anchor.request));
   if (candidates.length !== 1) return unavailable(candidates.length ? "ambiguous" : "missing",
-    candidates.length ? "日志中有多个相同时间及指标的调用，无法唯一关联。" : "日志中没有唯一匹配本次请求的调用记录。");
+    candidates.length ? "Multiple logged Calls have the same timestamp and metrics; no unique match is possible." : "No logged Call uniquely matches this request.");
   const usage = candidates[0].data.usage;
-  if (!isRecord(usage)) throw new StoreError("模型用量日志结构不兼容");
+  if (!isRecord(usage)) throw new StoreError("Incompatible model usage log structure");
   const apiCallId = stringValue(usage.apiCallId);
-  if (!apiCallId) return unavailable("missing", "本次日志缺少 apiCallId，不能关联独立输出与工具调用。");
-  if (callIds.get(apiCallId) !== 1) return unavailable("ambiguous", "日志中的 apiCallId 被多个调用重复使用，无法确认独立输出。");
+  if (!apiCallId) return unavailable("missing", "The log has no apiCallId for this Call; its Output and tool Calls cannot be linked.");
+  if (callIds.get(apiCallId) !== 1) return unavailable("ambiguous", "Multiple Calls reuse this apiCallId; the individual Output cannot be identified.");
   const replies = messages.filter(event => event.data.apiCallId === apiCallId);
-  if (!replies.length) return unavailable("missing", "本次调用尚未记录可关联的模型输出，请稍后重新打开。");
+  if (!replies.length) return unavailable("missing", "No model Output has been recorded for this Call yet. Reopen it later.");
   const outputs: string[] = [], requests = new Map<string, EventData>();
   for (const reply of replies) {
     if (reply.data.content !== null && reply.data.content !== undefined && typeof reply.data.content !== "string") {
-      throw new StoreError("本次模型输出结构不兼容");
+      throw new StoreError("Incompatible model Output structure");
     }
     if (typeof reply.data.content === "string" && reply.data.content.length) outputs.push(reply.data.content);
     if (reply.data.toolRequests !== undefined && reply.data.toolRequests !== null && !Array.isArray(reply.data.toolRequests)) {
-      throw new StoreError("本次工具调用指令结构不兼容");
+      throw new StoreError("Incompatible tool Call instruction structure");
     }
     if (!Array.isArray(reply.data.toolRequests)) continue;
     for (const tool of reply.data.toolRequests) {
-      if (!isRecord(tool) || !stringValue(tool.toolCallId)) throw new StoreError("本次工具调用指令缺少 ID");
+      if (!isRecord(tool) || !stringValue(tool.toolCallId)) throw new StoreError("The tool Call instruction is missing an ID");
       const id = String(tool.toolCallId);
       if (requests.has(id) && JSON.stringify(requests.get(id)) !== JSON.stringify(tool)) {
-        return unavailable("ambiguous", "本次输出包含冲突的工具调用 ID，已停止关联。");
+        return unavailable("ambiguous", "This Output contains conflicting tool Call IDs; linking was stopped.");
       }
       requests.set(id, tool);
     }
@@ -111,11 +111,11 @@ function resolveCall(sid: string, anchor: CallAnchor, zone: string, log: CallLog
   const formatter = zoneFormatter(zone), tools: Tool[] = [];
   for (const [id, request] of requests) {
     const startCandidates = starts.get(id) ?? [], endCandidates = completes.get(id) ?? [];
-    if (startCandidates.length > 1 || endCandidates.length > 1) return unavailable("ambiguous", "本次工具调用有重复的执行记录，无法唯一关联。");
+    if (startCandidates.length > 1 || endCandidates.length > 1) return unavailable("ambiguous", "This tool Call has duplicate execution records; no unique match is possible.");
     const start = startCandidates[0], end = endCandidates[0];
     if (start && ((stringValue(start.data.toolName) && stringValue(request.name) && start.data.toolName !== request.name)
       || (start.data.arguments !== undefined && request.arguments !== undefined && contentText(start.data.arguments) !== contentText(request.arguments)))) {
-      return unavailable("ambiguous", "本次工具指令与执行记录不一致，已停止关联。");
+      return unavailable("ambiguous", "The tool instruction and execution records disagree; linking was stopped.");
     }
     const timestamp = start?.timestamp ?? end?.timestamp ?? null;
     tools.push({ id, name: stringValue(request.name) ?? stringValue(start?.data.toolName),
@@ -130,11 +130,11 @@ function resolveCall(sid: string, anchor: CallAnchor, zone: string, log: CallLog
       || (!!serviceId && (record.serviceRequestId === serviceId || modelCall.service_request_id === serviceId));
   });
   let input = missingInput;
-  if (inputCandidates.length > 1) input = { status: "ambiguous", content: null, message: "本次完整输入日志有多个候选，无法唯一确认。" };
+  if (inputCandidates.length > 1) input = { status: "ambiguous", content: null, message: "Multiple full Input records match this Call; no unique match is possible." };
   else if (inputCandidates.length === 1 && (typeof inputCandidates[0].data.requestMessages === "string" || Array.isArray(inputCandidates[0].data.requestMessages))) {
-    input = { status: "recorded", content: contentText(inputCandidates[0].data.requestMessages), message: "日志保存的本次调用输入，按调用 ID 关联。" };
+    input = { status: "recorded", content: contentText(inputCandidates[0].data.requestMessages), message: "Recorded Input for this Call, linked by Call ID." };
   }
-  return { status: "matched", message: "按同一会话及 Agent、同一秒的请求时间、模型和用量/耗时指标唯一匹配日志，再按 apiCallId 与 toolCallId 关联本次输出和执行结果；不是整轮对话。",
+  return { status: "matched", message: "Uniquely matched by Session, Agent, request second, model, and usage/duration metrics, then linked to this Call's Output and execution results by apiCallId and toolCallId; this is not the entire Round.",
     api_call_id: apiCallId, outputs, tools, input, partial_tail: log.partial_tail };
 }
 export async function singleCall(db: string, sid: string, anchor: CallAnchor, zone: string): Promise<CallDetail> {
@@ -156,7 +156,7 @@ export async function roundActivities(db: string, sid: string, anchors: CallAnch
     const detail = resolveCall(sid, anchor, zone, log);
     return { request_id: anchor.request.id, status: detail.status, message: detail.message, tools: detail.tools.map(tool => {
       const label = safeLabel(tool.name);
-      const name = label && /^[a-zA-Z][\w.:/-]{0,159}$/.test(label) ? label : "未记录工具名";
+      const name = label && /^[a-zA-Z][\w.:/-]{0,159}$/.test(label) ? label : "Tool name not recorded";
       return { id: tool.id, name, summary: toolSynopsis(tool), status: tool.status, kind: name.split(/[.:]/).at(-1) === "skill" ? "skill" : "tool" };
     }) };
   }) };

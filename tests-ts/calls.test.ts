@@ -139,7 +139,7 @@ test("round activity batches the same unique per-call association without return
   const before = readFileSync(f.db), logBefore = readFileSync(path);
   const data = await roundActivities(f.db, "s", store.roundAnchors("s", {round: "61"}), "UTC");
   expect(data.calls.map(call => call.request_id)).toEqual(["1", "2"]);
-  expect(data.calls[0]).toMatchObject({status: "matched", tools: [{name: "functions.skill", summary: "加载 ponytail", status: "success", kind: "skill"}]});
+  expect(data.calls[0]).toMatchObject({status: "matched", tools: [{name: "functions.skill", summary: "Load ponytail", status: "success", kind: "skill"}]});
   expect(data.calls[1]).toMatchObject({status: "matched", tools: []});
   expect(JSON.stringify(data)).not.toMatch(/private output|private tool result|exact input|"arguments"|"outputs"|"result"/);
   expect(readFileSync(f.db)).toEqual(before);

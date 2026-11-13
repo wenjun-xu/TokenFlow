@@ -15,9 +15,9 @@ test("round groups aggregate all calls before paging, preserve zero/null and exa
   f.usage({ turn_index: 0, created_at: "2024-02-29T12:00:03Z" });
   f.usage({ turn_index: null, created_at: "invalid" });
   const before = readFileSync(f.db), data = store.rounds("s", {});
-  expect(data.rounds.map((row: { turn_index: string | null }) => row.turn_index)).toEqual(["0", "62", "61", null]);
-  expect(data.rounds[2].metrics).toMatchObject({ calls: "2", input_tokens: "9007199254741000", output_tokens: null, total_tokens: null });
-  expect(data.rounds[2]).toMatchObject({ first_request: "2024-02-29T12:00:00Z", last_request: "2024-02-29T12:00:01Z",
+  expect(data.rounds.map((row: { turn_index: string | null }) => row.turn_index)).toEqual(["62", "61", "0", null]);
+  expect(data.rounds[1].metrics).toMatchObject({ calls: "2", input_tokens: "9007199254741000", output_tokens: null, total_tokens: null });
+  expect(data.rounds[1]).toMatchObject({ first_request: "2024-02-29T12:00:00Z", last_request: "2024-02-29T12:00:01Z",
     first_request_display: "2024-02-29 12:00:00", models: ["actual-model"] });
   expect(data.round_pagination.total).toBe("4");
   expect(data.requests).toBeUndefined();
@@ -47,7 +47,7 @@ test("selected round metrics and call pagination stay scoped to session and peri
   expect(pages.flatMap(page => page.requests.map((row: {id:string}) => row.id))).toEqual(
     Array.from({length:55}, (_, index) => String(55-index)));
   expect(pages.every(page => page.token_trend.length === 55 && page.metrics.calls === "55")).toBe(true);
-  expect(() => store.rounds("s", {round:"61",year:"2024",month:"2",requestPage:"7"})).toThrow("页码超出范围");
+  expect(() => store.rounds("s", {round:"61",year:"2024",month:"2",requestPage:"7"})).toThrow("Page number is out of range");
   expect(store.session("s", {}).request_pagination.size).toBe("50");
   expect(store.session("s", {}).requests.length).toBe(50);
   expect(store.rounds("s", { round: "missing" }).requests[0].turn_index).toBeNull();
@@ -70,18 +70,35 @@ test("token trend preserves exact per-call metrics and chronological fractional 
   expect(store.rounds("s", { round: "99" }).token_trend).toEqual([]);
   expect(readFileSync(f.db)).toEqual(before);
 });
-test("group paging counts groups instead of calls and handles latest ordering beyond the first call page", () => {
+test("group paging counts groups instead of calls and preserves round ordering beyond the first call page", () => {
   for (let index = 0; index < 55; index++) f.usage({ turn_index: index });
   f.usage({ turn_index: 0, created_at: "2024-02-29T12:00:00.000000001Z" });
   const first = store.rounds("s", {}), second = store.rounds("s", { roundPage: "6" });
   expect(first.round_pagination.total).toBe("55");
-  expect(first.rounds[0].turn_index).toBe("0");
-  expect(first.rounds[0].metrics.calls).toBe("2");
+  expect(first.rounds[0].turn_index).toBe("54");
+  expect(second.rounds.at(-1).turn_index).toBe("0");
+  expect(second.rounds.at(-1).metrics.calls).toBe("2");
+  expect(first.rounds.map((row: {turn_index:string}) => row.turn_index)).toEqual(["54","53","52","51","50","49","48","47","46","45"]);
   expect(first.rounds.length).toBe(10);
   expect(first.round_pagination.size).toBe("10");
   expect(first.round_trend.length).toBe(55);
   expect(second.rounds.length).toBe(5);
   expect(second.round_trend).toEqual(first.round_trend);
+});
+test("round list is descending while trend stays ascending regardless of timestamps, including zero, invalid time and large indices", () => {
+  for (const index of [9, 0, 21, 2, 10, 1]) {
+    f.usage({turn_index:index,created_at:index === 2 ? "invalid" : "2024-02-29T12:00:00Z"});
+  }
+  f.usage({turn_index:9007199254740993n});
+  f.usage({turn_index:9007199254740992n});
+  f.usage({turn_index:null});
+  const before = readFileSync(f.db), result = store.rounds("s", {});
+  const expected = ["0", "1", "2", "9", "10", "21", "9007199254740992", "9007199254740993", null];
+  expect(result.rounds.map((row: {turn_index:string|null}) => row.turn_index)).toEqual([...expected.slice(0, -1).reverse(), null]);
+  expect(result.round_trend.map((row: {turn_index:string|null}) => row.turn_index)).toEqual(expected);
+  expect(result.round_trend[2].invalid_time).toBe(true);
+  expect(result.metrics.calls).toBe("9");
+  expect(readFileSync(f.db)).toEqual(before);
 });
 test("overview trend covers all scoped rounds with unique bounded user previews and exact aggregate values", () => {
   f.session("other");
@@ -96,16 +113,27 @@ test("overview trend covers all scoped rounds with unique bounded user previews 
   const before = readFileSync(f.db), overview = store.rounds("s",{year:"2024",month:"2"});
   expect(overview.round_trend.map((row:{turn_index:string})=>row.turn_index)).toEqual(["61","62"]);
   const first = overview.round_trend[0];
+  expect(first.request_id).toBe("1");
   expect(first.metrics).toMatchObject({calls:"2",input_tokens:"9007199254741000",output_tokens:null,total_tokens:null});
   expect(first.summary_status).toBe("recorded");
   expect(first.summary).toBe("unique round 61 ".repeat(100).slice(0,240));
-  expect(overview.round_trend[1]).toMatchObject({summary_status:"ambiguous",summary:"本轮对话无法唯一确认。"});
+  expect(overview.round_trend[1]).toMatchObject({summary_status:"ambiguous",summary:"This Round's conversation cannot be uniquely identified."});
   expect(store.rounds("s",{}).round_trend.find((row:{turn_index:string|null})=>row.turn_index===null))
     .toMatchObject({summary_status:"no_index",invalid_time:true});
   expect(readFileSync(f.db)).toEqual(before);
 });
+test("overview dialogue anchors remain in the selected session, round and date scope", () => {
+  f.session("other");
+  f.usage({id:1,session_id:"other",turn_index:0});
+  f.usage({id:2,turn_index:0,created_at:"2024-03-01T00:00:00Z"});
+  f.usage({id:3,turn_index:0});
+  f.usage({id:4,turn_index:0,created_at:"invalid"});
+  expect(store.rounds("s",{year:"2024",month:"2"}).round_trend[0].request_id).toBe("3");
+  expect(store.rounds("s",{}).round_trend[0].request_id).toBe("2");
+});
 test("round endpoints and page navigation preserve authentication and reject unknown queries", async () => {
   f.usage({ turn_index: 61 });
+  f.turn(61, "full round dialogue ".repeat(100));
   const runner = await QueryRunner.create(f.db, f.state, "UTC"), server = makeServer(runner, "synthetic-key");
   const origin = `http://127.0.0.1:${server.port}`, headers = { "X-TokenFlow-Key": "synthetic-key" };
   try {
@@ -113,6 +141,11 @@ test("round endpoints and page navigation preserve authentication and reject unk
     const response = await fetch(origin + "/api/sessions/s/rounds?round=61", { headers });
     expect(response.status).toBe(200);
     expect((await response.json()).requests[0].turn_index).toBe("61");
+    const overview = await (await fetch(origin + "/api/sessions/s/rounds", {headers})).json();
+    const anchor = overview.round_trend[0].request_id;
+    const dialogue = await (await fetch(origin + `/api/sessions/s/requests/${anchor}?view=matched&full=1`, {headers})).json();
+    expect(dialogue.association).toBe("matched");
+    expect(dialogue.turns[0]).toMatchObject({turn_index:"61",user_message:"full round dialogue ".repeat(100),truncated:false});
     expect((await fetch(origin + "/?sid=s&round=61&roundPage=2&list=")).status).toBe(200);
     expect((await fetch(origin + "/api/sessions/s/rounds?unknown=1", { headers })).status).toBe(400);
     expect((await fetch(origin + "/api/sessions/other/rounds", { headers })).status).toBe(404);

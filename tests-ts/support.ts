@@ -17,7 +17,7 @@ CREATE TABLE turns(id INTEGER PRIMARY KEY,session_id TEXT,turn_index INTEGER,tim
 
 export class Fixture {
   root = resolve(import.meta.dir, ".f-" + randomUUID().slice(0, 8));
-  db = join(this.root, "source ? # 数据.db");
+  db = join(this.root, "source ? # \u6570\u636e.db");
   state = join(this.root, "state");
   connection: Database;
   constructor() {
@@ -39,7 +39,7 @@ export class Fixture {
       cache_read_tokens: 80n, created_at: "2024-02-29T12:00:00Z", ...values,
     });
   }
-  turn(turn_index = 0, text = "<script>alert('x')</script>\n中文", session_id = "s") {
+  turn(turn_index = 0, text = "<script>alert('x')</script>\n\u4e2d\u6587", session_id = "s") {
     this.insert("turns", { session_id, turn_index, timestamp: "2024-01-01",
       user_message: text, assistant_response: text });
   }

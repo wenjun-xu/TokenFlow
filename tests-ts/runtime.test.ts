@@ -61,8 +61,51 @@ test("HTTP security whitelist strict params and embedded native UI", async () =>
     const good = await request("/api/dashboard", { "X-TokenFlow-Key": "secret-key" });
     expect((await good.json()).metrics.total_tokens).toBe("120");
     expect(good.headers.get("Cache-Control")).toBe("no-store");
+    f.session("high");
+    f.usage({ session_id: "high", input_tokens: 300n, output_tokens: 0n });
+    const ranked = await request("/api/dashboard?sort=total_tokens", { "X-TokenFlow-Key": "secret-key" });
+    expect(ranked.status).toBe(200);
+    expect((await ranked.json()).sessions[0].id).toBe("high");
+    const ascending = await request("/api/dashboard?sort=total_tokens_asc", { "X-TokenFlow-Key": "secret-key" });
+    expect(ascending.status).toBe(200);
+    expect((await ascending.json()).sessions.map((row: { id: string }) => row.id)).toEqual(["s", "high"]);
+    f.connection.exec("UPDATE sessions SET repository='owner/repo' WHERE id='high'");
+    const filtered = await request("/api/dashboard?repository=owner%2Frepo&model=actual-model", { "X-TokenFlow-Key": "secret-key" });
+    expect(filtered.status).toBe(200);
+    const filteredData = await filtered.json();
+    expect(filteredData.sessions.map((row: {id: string}) => row.id)).toEqual(["high"]);
+    expect(filteredData.metrics.total_tokens).toBe("300");
+    expect(filteredData.top_sessions[0].id).toBe("high");
+    expect(filteredData.session_usage.map((row: {id: string}) => row.id)).toEqual(["high"]);
+    expect(filteredData.session_usage[0].metrics).toEqual(filteredData.metrics);
+    expect(filteredData.repositories).toEqual(["owner/repo"]);
+    expect(filteredData.model_types).toEqual(["actual-model"]);
+    expect(filteredData).not.toHaveProperty("daily_trend");
+    expect(filteredData).not.toHaveProperty("hourly_trend");
+    const selectedDay = await request("/api/dashboard?year=2024&month=2&day=29&repository=owner%2Frepo&model=actual-model",
+      {"X-TokenFlow-Key": "secret-key"});
+    expect(selectedDay.status).toBe(200);
+    const selectedData = await selectedDay.json();
+    expect(selectedData.period).toBe("2024-02-29");
+    expect(selectedData.metrics.total_tokens).toBe("300");
+    expect(selectedData.sessions[0].metrics).toEqual(selectedData.metrics);
+    expect(selectedData.top_sessions[0].metrics).toEqual(selectedData.metrics);
+    expect((await request("/api/dashboard?date=today")).status).toBe(403);
+    const todayStart = new Date().toISOString().slice(0, 10);
+    const todayResponse = await request("/api/dashboard?date=today", {"X-TokenFlow-Key": "secret-key"});
+    expect(todayResponse.status).toBe(200);
+    const todayData = await todayResponse.json();
+    expect([todayStart, new Date().toISOString().slice(0, 10)]).toContain(todayData.today);
+    expect(todayData.period).toBe(todayData.today);
+    expect(todayData).not.toHaveProperty("daily_trend");
+    expect(todayData).not.toHaveProperty("hourly_trend");
+    expect((await request("/api/dashboard?year=9999", {"X-TokenFlow-Key": "secret-key"})).status).toBe(400);
     for (const [path, code] of [["/api/stop", 404], ["/api/dashboard?year=2024&month=2&day=30", 400],
       ["/api/dashboard?year=2024&year=2025", 400], ["/api/sessions/missing", 404], ["/source.db", 404],
+      ["/api/dashboard?sort=invalid", 400], ["/api/dashboard?sort=latest&sort=total_tokens", 400],
+      ["/api/dashboard?model=", 400], ["/api/dashboard?repository=", 400],
+      ["/api/dashboard?repository=one&repository=two", 400],
+      ["/api/dashboard?date=2023-02-29", 400], ["/api/dashboard?date=today&year=2024", 400],
       ["/app.js?key=x", 400]] as [string, number][]) expect((await request(path, { "X-TokenFlow-Key": "secret-key" })).status).toBe(code);
     expect((await request("/api/stop", {}, "POST")).status).toBe(405);
     expect(await (await request("/app.js")).text()).toContain("sessionStorage");
@@ -77,6 +120,8 @@ test("HTML navigation accepts detail, filter, paging and return-list state witho
     const queries = [
       "sid=s&list=",
       "year=2024&month=2&day=29&page=3",
+      "year=2024&month=2&day=29&page=2&sort=total_tokens",
+      "year=2024&repository=owner%2Frepo&model=actual-model&sort=total_tokens",
       "sid=s&list=year%3D2024%26month%3D2%26day%3D29%26page%3D3&year=2024&month=2&day=29",
       "sid=s&list=&requestPage=2&turnPage=2&expandedTurn=8",
       "sid=%3Cscript%3E&list=",
@@ -88,6 +133,7 @@ test("HTML navigation accepts detail, filter, paging and return-list state witho
       expect(await response.text()).toBe(html);
     }
     for (const path of ["/?key=not-a-fragment", "/?unknown=1", "/?sid=s&sid=other",
+      "/?sort=latest&sort=total_tokens",
       "/app.js?sid=s", "/style.css?page=2"]) {
       expect((await fetch(origin + path)).status).toBe(400);
     }
@@ -152,7 +198,7 @@ test("CLI help/version no source or state access", async () => {
       env: { ...process.env, HOME: f.root, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" } });
     expect(await p.exited).toBe(0);
     const text = await new Response(p.stdout).text();
-    expect(text).toContain(arg === "--version" ? "0.2.2" : "start");
+    expect(text).toContain(arg === "--version" ? "0.2.3" : "start");
     expect(existsSync(join(f.root, "Library"))).toBe(false);
   }
 });
@@ -161,17 +207,17 @@ test("source deletion after readiness HTTP503", async () => {
   const server = makeServer(runner, "synthetic-key");
   try {
     unlinkSync(f.db);
-    await expect(runner.run("dashboard", {})).rejects.toThrow("源数据库");
+    await expect(runner.run("dashboard", {})).rejects.toThrow("source database");
     const r = await fetch(`http://127.0.0.1:${server.port}/api/dashboard`, { headers: { "X-TokenFlow-Key": "synthetic-key" } });
     expect(r.status).toBe(503);
-    expect((await r.json()).error).toContain("源数据库");
+    expect((await r.json()).error).toContain("source database");
   } finally { await runner.close(); await server.stop(true); }
 });
 test("browser failure keeps healthy service and manual URL", async () => {
   const output: string[] = [], errors: string[] = [];
   expect(await main(["start", "--db", f.db], { state: f.state, out: s => output.push(s), err: s => errors.push(s), open: async () => false })).toBe(0);
   expect(output.join("\n")).toContain("#key=");
-  expect(errors.join("\n")).toContain("服务仍在运行");
+  expect(errors.join("\n")).toContain("service is still running");
   expect((await control(f.state, readState(f.state), "status")).ok).toBe(true);
 });
 test("browser launcher uses private stdin, never credentials in command arguments", async () => {
@@ -285,7 +331,7 @@ test("whole-task timeout, bounded queue, cancellation of only owned children", a
   try {
     runner.workerCommand = () => [process.execPath, "-e", "await Bun.sleep(30000)"];
     const started = performance.now();
-    await expect(runner.run("dashboard", {})).rejects.toThrow("完整读取任务超时");
+    await expect(runner.run("dashboard", {})).rejects.toThrow("complete read operation timed out");
     expect(performance.now() - started).toBeLessThan(3000);
     expect(runner.busy).toBe(false);
   } finally { await runner.close(); }
@@ -294,7 +340,7 @@ test("whole-task timeout, bounded queue, cancellation of only owned children", a
   const errors: unknown[] = [];
   const task = second.run("dashboard", {}).catch(e => errors.push(e));
   await Bun.sleep(100);
-  await expect(second.run("dashboard", {})).rejects.toThrow("繁忙");
+  await expect(second.run("dashboard", {})).rejects.toThrow("busy");
   await second.close(); await task;
   expect(errors.length).toBe(1); expect(second.busy).toBe(false);
   f.connection.exec("BEGIN EXCLUSIVE; ROLLBACK");
@@ -303,7 +349,7 @@ test("source replacement and sidecar symlink fail", async () => {
   const runner = await QueryRunner.create(f.db, f.state, "UTC");
   try {
     const replacement = join(f.root, "replacement"); writeFileSync(replacement, readFileSync(f.db)); renameSync(replacement, f.db);
-    await expect(runner.run("dashboard", {})).rejects.toThrow("替换");
+    await expect(runner.run("dashboard", {})).rejects.toThrow("replaced");
   } finally { await runner.close(); }
   symlinkSync(join(f.root, "not-wal"), f.db + "-wal");
   await expect(QueryRunner.create(f.db, f.state, "UTC")).rejects.toThrow("sidecar");
@@ -313,7 +359,7 @@ test("internal query directly refuses isolation before source reads", async () =
   const p = Bun.spawn(command("_query"), { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   p.stdin.write(JSON.stringify({ state: f.state, db: f.db })); p.stdin.end();
   expect(await p.exited).toBe(0);
-  expect(JSON.parse(await new Response(p.stdout).text()).error).toContain("拒绝打开源库");
+  expect(JSON.parse(await new Response(p.stdout).text()).error).toContain("opening the source database was refused");
   expect(readFileSync(f.db)).toEqual(before);
   expect(readdirSync(f.state)).toEqual([]);
 });

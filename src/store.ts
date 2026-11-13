@@ -18,18 +18,23 @@ export type CallRequest = {
   duration_ms: number | string | null; initiator: string | null; finish_reason: string | null;
 };
 export type CallAnchor = { request: CallRequest; candidate_count: string };
-type RoundGroup = { turn_index: bigint | null; metrics: Metrics; models: Set<string>;
+type RoundGroup = { turn_index: bigint | null; request_id: bigint; metrics: Metrics; models: Set<string>;
   first_key: TimeKey | null; last_key: TimeKey | null; first_request: string | null; last_request: string | null };
 type TrendPoint = { id: bigint; created_at: string | null; model: string; input_tokens: bigint | null;
   output_tokens: bigint | null; cache_read_tokens: bigint | null; key: TimeKey | null };
 
 function roundIndex(value: string): bigint | null {
-  if (typeof value !== "string") throw new StoreError("轮次序号无效", 400);
+  if (typeof value !== "string") throw new StoreError("Invalid Round index", 400);
   if (value === "missing") return null;
-  if (!/^-?[0-9]{1,20}$/.test(value)) throw new StoreError("轮次序号无效", 400);
+  if (!/^-?[0-9]{1,20}$/.test(value)) throw new StoreError("Invalid Round index", 400);
   const index = BigInt(value);
-  if (index < -(2n ** 63n) || index >= 2n ** 63n) throw new StoreError("轮次序号超出整数范围", 400);
+  if (index < -(2n ** 63n) || index >= 2n ** 63n) throw new StoreError("Round index is outside the integer range", 400);
   return index;
+}
+function roundOrder(a: RoundGroup, b: RoundGroup, descending = false): number {
+  if (a.turn_index === null || b.turn_index === null) return a.turn_index === b.turn_index ? 0 : a.turn_index === null ? 1 : -1;
+  const order = a.turn_index < b.turn_index ? -1 : a.turn_index > b.turn_index ? 1 : 0;
+  return descending ? -order : order;
 }
 
 export function integerStrings(value: any): any {
@@ -45,7 +50,7 @@ export class Metrics {
     this.calls++;
     for (const field of TOKEN_FIELDS) {
       const value = row[field];
-      if (value !== null && typeof value !== "bigint") throw new StoreError("Token 字段不是整数，数据库结构或记录不兼容");
+      if (value !== null && typeof value !== "bigint") throw new StoreError("A token field is not an integer; incompatible database schema or record");
       if (value === null) this.values[field] = null;
       else if (this.values[field] !== null) this.values[field] += value;
     }
@@ -57,16 +62,16 @@ export class Metrics {
 }
 export function pageNumber(args: Args, key: string): number {
   const raw = args[key] ?? "1";
-  if (typeof raw !== "string" || !/^[0-9]{1,8}$/.test(raw) || Number(raw) < 1) throw new StoreError("页码必须是正整数", 400);
+  if (typeof raw !== "string" || !/^[0-9]{1,8}$/.test(raw) || Number(raw) < 1) throw new StoreError("Page number must be a positive integer", 400);
   return Number(raw);
 }
 export function paged(total: bigint, page: number, size: number) {
   const pages = total === 0n ? 1n : (total + BigInt(size) - 1n) / BigInt(size);
-  if (BigInt(page) > pages) throw new StoreError(`页码超出范围，请返回第 1 页（共 ${pages} 页）`, 400);
+  if (BigInt(page) > pages) throw new StoreError(`Page number is out of range; return to page 1 (${pages} pages total)`, 400);
   return { page, pages, total, size };
 }
 function textFields(row: Row, fields: string[]) {
-  if (fields.some(f => row[f] !== null && typeof row[f] !== "string")) throw new StoreError("数据库文本字段类型不兼容");
+  if (fields.some(f => row[f] !== null && typeof row[f] !== "string")) throw new StoreError("Incompatible database text field type");
 }
 function numericFields(row: Row, fields: string[]) {
   for (const field of fields) {
@@ -74,30 +79,39 @@ function numericFields(row: Row, fields: string[]) {
     if (value === null || typeof value === "bigint") continue;
     if (PERFORMANCE_FIELDS.has(field)) {
       if (typeof value === "number" && Number.isFinite(value)) continue;
-      throw new StoreError(`请求耗时字段 ${field} 必须是有限数值或 NULL`);
+      throw new StoreError(`Request duration field ${field} must be a finite number or NULL`);
     }
-    throw new StoreError(`原始轮次字段 ${field} 必须是整数或 NULL`);
+    throw new StoreError(`Raw Round field ${field} must be an integer or NULL`);
   }
 }
 function usageFields(row: Row) {
-  if (typeof row.model !== "string" || !row.model.trim()) throw new StoreError("请求实际模型缺失或不兼容，请检查数据库结构");
-  if (typeof row.id !== "bigint") throw new StoreError("请求 ID 类型不兼容");
+  if (typeof row.model !== "string" || !row.model.trim()) throw new StoreError("The request's actual model is missing or incompatible; check the database schema");
+  if (typeof row.id !== "bigint") throw new StoreError("Incompatible request ID type");
   textFields(row, ["session_id", "model", "created_at", "agent_id", "initiator", "finish_reason"]);
   numericFields(row, ["duration_ms", "time_to_first_token_ms", "turn_index"]);
 }
+function sessionTotalOrder(a: Row, b: Row, ascending = false): number {
+  const left: bigint | null = a.acc.result().total_tokens, right: bigint | null = b.acc.result().total_tokens;
+  if (left !== right) {
+    if (left === null || right === null) return left === null ? 1 : -1;
+    return (left > right ? -1 : 1) * (ascending ? -1 : 1);
+  }
+  if (!a.latest_key || !b.latest_key) return a.latest_key ? -1 : b.latest_key ? 1 : lexical(a.id, b.id);
+  return -compareTime(a.latest_key, b.latest_key) || lexical(a.id, b.id);
+}
 function requestInteger(sid: string, requestId: string): bigint {
   if (typeof sid !== "string" || !sid || sid.length > 1024 || typeof requestId !== "string"
-    || !/^-?[0-9]{1,20}$/.test(requestId)) throw new StoreError("会话或请求 ID 无效", 400);
+    || !/^-?[0-9]{1,20}$/.test(requestId)) throw new StoreError("Invalid Session or request ID", 400);
   const id = BigInt(requestId);
-  if (id < -(2n ** 63n) || id >= 2n ** 63n) throw new StoreError("请求 ID 超出整数范围", 400);
+  if (id < -(2n ** 63n) || id >= 2n ** 63n) throw new StoreError("Request ID is outside the integer range", 400);
   return id;
 }
 function sqliteError(error: unknown): StoreError {
   const code = (error as { code?: string }).code ?? "";
-  if (/BUSY|LOCKED/.test(code)) return new StoreError("数据库被锁定，读取超时；请稍后重试");
-  if (/CORRUPT|NOTADB/.test(code)) return new StoreError("数据库损坏或不是 SQLite 文件；请检查数据源");
-  if (/CANTOPEN|READONLY|PERM|AUTH/.test(code)) return new StoreError("无法只读访问数据库或 WAL/SHM；工具不会创建或修复它们");
-  return new StoreError("数据库读取失败或结构不兼容；请检查数据源及 WAL/SHM");
+  if (/BUSY|LOCKED/.test(code)) return new StoreError("The database is locked and the read timed out; try again later");
+  if (/CORRUPT|NOTADB/.test(code)) return new StoreError("The database is corrupt or is not a SQLite file; check the data source");
+  if (/CANTOPEN|READONLY|PERM|AUTH/.test(code)) return new StoreError("Could not access the database or WAL/SHM read-only; this tool will not create or repair them");
+  return new StoreError("Database read failed or the schema is incompatible; check the data source and WAL/SHM");
 }
 export class Store {
   constructor(readonly db: string, readonly zone: string, readonly timeout = 12) {}
@@ -105,9 +119,9 @@ export class Store {
   session(sid: string, args: Args): any { return this.read(sid, args); }
   rounds(sid: string, args: Args): any { return this.read(sid, args, true); }
   private requestRecord(db: Database, sid: string, id: bigint): Row {
-    if (!db.query<Row, [string]>("SELECT id FROM sessions WHERE id=?").get(sid)) throw new StoreError("会话不存在或已被删除", 404);
+    if (!db.query<Row, [string]>("SELECT id FROM sessions WHERE id=?").get(sid)) throw new StoreError("The Session does not exist or was deleted", 404);
     const row = db.query<Row, [string, bigint]>(`SELECT ${USAGE_FIELDS} FROM assistant_usage_events WHERE session_id=? AND id=?`).get(sid, id);
-    if (!row) throw new StoreError("请求不存在或不属于该会话，请刷新", 404);
+    if (!row) throw new StoreError("The request does not exist or does not belong to this Session; refresh the page", 404);
     usageFields(row);
     const metrics = new Metrics(); metrics.add(row);
     return { ...row, total_tokens: metrics.result().total_tokens, invalid_time: parseTime(row.created_at) === null };
@@ -125,14 +139,14 @@ export class Store {
     });
   }
   roundAnchors(sid: string, args: Args): CallAnchor[] {
-    if (Object.keys(args).some(key => !["round", "year", "month", "day"].includes(key)) || args.round === undefined) {
-      throw new StoreError("轮次摘要查询参数无效", 400);
+    if (Object.keys(args).some(key => !["round", "year", "month", "day", "start", "end"].includes(key)) || args.round === undefined) {
+      throw new StoreError("Invalid Round summary query parameters", 400);
     }
     const selected = roundIndex(args.round);
     let period: Period;
-    try { period = new Period(args, this.zone); } catch { throw new StoreError("日期条件无效", 400); }
+    try { period = new Period(args, this.zone); } catch { throw new StoreError("Invalid date filter", 400); }
     const result = this.snapshot((db, check) => {
-      if (!db.query<Row, [string]>("SELECT id FROM sessions WHERE id=?").get(sid)) throw new StoreError("会话不存在或已被删除", 404);
+      if (!db.query<Row, [string]>("SELECT id FROM sessions WHERE id=?").get(sid)) throw new StoreError("The Session does not exist or was deleted", 404);
       const counts = new Map<string, bigint>(), rows: Row[] = [];
       const fingerprint = (row: Row) => {
         const time = parseTime(row.created_at);
@@ -151,10 +165,10 @@ export class Store {
     return result.anchors;
   }
   toolAnchor(sid: string, turnId: string): string | null {
-    if (!sid || sid.length > 1024 || !/^[0-9]{1,20}$/.test(turnId) || BigInt(turnId) >= 2n ** 63n) throw new StoreError("会话或轮次 ID 无效", 400);
+    if (!sid || sid.length > 1024 || !/^[0-9]{1,20}$/.test(turnId) || BigInt(turnId) >= 2n ** 63n) throw new StoreError("Invalid Session or Round ID", 400);
     const result = this.snapshot(db => {
       const row = db.query<Row, [string, bigint]>("SELECT user_message FROM turns WHERE session_id=? AND id=?").get(sid, BigInt(turnId));
-      if (!row) throw new StoreError("轮次不存在或不属于该会话", 404);
+      if (!row) throw new StoreError("The Round does not exist or does not belong to this Session", 404);
       textFields(row, ["user_message"]);
       return row;
     });
@@ -162,10 +176,10 @@ export class Store {
   }
   request(sid: string, requestId: string, args: Args): any {
     const id = requestInteger(sid, requestId);
-    if (Object.keys(args).some(key => !["view", "turnPage", "expandedTurn", "full"].includes(key))) throw new StoreError("未知查询参数", 400);
-    if (args.full !== undefined && args.full !== "1") throw new StoreError("正文读取参数无效", 400);
+    if (Object.keys(args).some(key => !["view", "turnPage", "expandedTurn", "full"].includes(key))) throw new StoreError("Unknown query parameter", 400);
+    if (args.full !== undefined && args.full !== "1") throw new StoreError("Invalid content read parameter", 400);
     const view = args.view ?? "matched";
-    if (view !== "matched" && view !== "all") throw new StoreError("对话视图无效", 400);
+    if (view !== "matched" && view !== "all") throw new StoreError("Invalid conversation view", 400);
     return this.snapshot((db, check) => {
       const row = this.requestRecord(db, sid, id);
       const result: Row = {
@@ -184,7 +198,7 @@ export class Store {
     const numeric = new Set(["version", "id", "turn_index", "duration_ms", "time_to_first_token_ms", ...TOKEN_FIELDS]);
     for (const [table, fields] of [["sessions", SESSION_FIELDS], ["assistant_usage_events", USAGE_FIELDS],
       ["turns", TURN_FIELDS], ["schema_version", ["version"]]] as [string, string[]][]) {
-      if (tables.get(table) !== "table") throw new StoreError(`数据库结构不兼容：缺少普通表 ${table}`);
+      if (tables.get(table) !== "table") throw new StoreError(`Incompatible database schema: missing regular table ${table}`);
       const columns = new Map(db.query<Row, []>(`PRAGMA table_info(${table})`).all().map(r => [r.name, r.type.toUpperCase()]));
       for (const field of fields) {
         const declared = columns.get(field);
@@ -193,17 +207,17 @@ export class Store {
           ? PERFORMANCE_FIELDS.has(field) ? /INT|REAL|FLOA|DOUB|NUMERIC|DECIMAL/.test(declared) : declared.includes("INT")
           : /TEXT|CHAR|CLOB/.test(declared));
         if (!validType) {
-          throw new StoreError(`数据库结构不兼容：${table}.${field} 必需字段类型错误或缺失`);
+          throw new StoreError(`Incompatible database schema: required field ${table}.${field} is missing or has the wrong type`);
         }
       }
     }
     const versions = db.query<{ version: bigint }, []>("SELECT version FROM schema_version").all().map(r => r.version);
-    if (versions.some(v => typeof v !== "bigint")) throw new StoreError("数据库版本字段不兼容");
+    if (versions.some(v => typeof v !== "bigint")) throw new StoreError("Incompatible database version field");
     return versions;
   }
   private snapshot(work: (db: Database, check: () => void, versions: bigint[]) => Row): any {
     const deadline = performance.now() + this.timeout * 1000;
-    const check = () => { if (performance.now() >= deadline) throw new StoreError("数据库读取超时，请缩小范围后重试"); };
+    const check = () => { if (performance.now() >= deadline) throw new StoreError("Database read timed out; narrow the range and try again"); };
     let db: Database | undefined;
     try {
       db = new Database(this.db, { readonly: true, create: false, strict: true, safeIntegers: true });
@@ -228,24 +242,59 @@ export class Store {
     } finally { db?.close(); }
   }
   private read(sid: string | null, args: Args, grouped = false): any {
-    const allowed = grouped ? ["year", "month", "day", "round", args.round === undefined ? "roundPage" : "requestPage"]
-      : sid === null ? ["year", "month", "day", "page"] : ["year", "month", "day", "requestPage", "turnPage", "expandedTurn", "full"];
-    if (Object.keys(args).some(k => !allowed.includes(k))) throw new StoreError("未知查询参数", 400);
-    if (args.full !== undefined && args.full !== "1") throw new StoreError("正文读取参数无效", 400);
+    const allowed = grouped ? ["year", "month", "day", "start", "end", "round", args.round === undefined ? "roundPage" : "requestPage"]
+      : sid === null ? ["date", "year", "month", "day", "start", "end", "page", "pageSize", "sort", "repository", "model"]
+        : ["year", "month", "day", "start", "end", "requestPage", "turnPage", "expandedTurn", "full"];
+    if (Object.keys(args).some(k => !allowed.includes(k))) throw new StoreError("Unknown query parameter", 400);
+    if (args.sort !== undefined && !["latest", "latest_asc", "total_tokens", "total_tokens_asc"].includes(args.sort)) throw new StoreError("Invalid Session sort option", 400);
+    for (const [field, label] of [["repository", "Repository"], ["model", "Model"]]) {
+      const value = args[field];
+      if (value !== undefined && (typeof value !== "string" || !value.trim() || value.length > 1024)) {
+        throw new StoreError(`Invalid ${label} filter`, 400);
+      }
+      if (args.pageSize !== undefined && !["10", "20", "50", "100"].includes(args.pageSize)) throw new StoreError("Invalid page size", 400);
+    }
+    if (args.full !== undefined && args.full !== "1") throw new StoreError("Invalid content read parameter", 400);
     const selectedRound = grouped && args.round !== undefined ? roundIndex(args.round) : undefined;
+    const readAt = new Date();
+    const today = formatTime(readAt.toISOString(), zoneFormatter(this.zone))?.slice(0, 10);
+    if (!today) throw new StoreError("Could not read the OS-local date");
+    if (args.date !== undefined && (!["today", "last7", "last30"].includes(args.date)
+      || ["year", "month", "day", "start", "end"].some(field => args[field] !== undefined))) {
+      throw new StoreError("Invalid date filter", 400);
+    }
+    const [year, month, day] = today.split("-");
+    const first = new Date(today + "T00:00:00Z");
+    first.setUTCDate(first.getUTCDate() - (args.date === "last7" ? 6 : args.date === "last30" ? 29 : 0));
+    const periodArgs = args.date === "today" ? {year, month, day}
+      : args.date ? {start: first.toISOString().slice(0, 10), end: today} : args;
     let period: Period;
-    try { period = new Period(args, this.zone); } catch { throw new StoreError("日期条件无效：请选择有效的年、月、日", 400); }
+    try { period = new Period(periodArgs, this.zone); } catch { throw new StoreError("Invalid date filter: select a valid year, month, and day", 400); }
+    if (sid === null && ((period.year !== null && period.label > today) || (period.end && period.end > today))) throw new StoreError("The selected date cannot be later than Today", 400);
     return this.snapshot((db, check, versions) => {
       const sessions = new Map<string, Row>();
       for (const row of db.query<Row, []>(`SELECT ${SESSION_FIELDS} FROM sessions`).iterate()) {
         check(); textFields(row, SESSION_FIELDS);
-        if (typeof row.id !== "string" || !row.id) throw new StoreError("会话 ID 不兼容");
+        if (typeof row.id !== "string" || !row.id) throw new StoreError("Incompatible Session ID");
         sessions.set(row.id, { ...row, acc: new Metrics(), models: new Set<string>(), latest_key: null, latest_request: null });
       }
-      if (sid !== null && !sessions.has(sid)) throw new StoreError("会话不存在或已被删除，请返回会话列表", 404);
+      if (sid !== null && !sessions.has(sid)) throw new StoreError("The Session does not exist or was deleted; return to the Session list", 404);
       const total = new Metrics(), models = new Map<string, Metrics>(), years = new Set<number>();
+      const modelTypes = new Set<string>();
+      const periodRepositories = new Set<string>();
       const groups = new Map<bigint | null, RoundGroup>();
       const trend: TrendPoint[] = [];
+      const usageTrend = new Map<string, Metrics>();
+      if (sid === null && period.day !== null) {
+        for (let hour = 0; hour < 24; hour++) usageTrend.set(`${period.label} ${String(hour).padStart(2, "0")}:00`, new Metrics());
+      } else if (sid === null && period.start && period.end) {
+        const date = new Date(period.start + "T00:00:00Z");
+        while (date.toISOString().slice(0, 10) <= period.end) {
+          check();
+          usageTrend.set(date.toISOString().slice(0, 10), new Metrics());
+          date.setUTCDate(date.getUTCDate() + 1);
+        }
+      }
       let invalid = 0n, orphan = 0n;
       for (const row of db.query<Row, []>(`SELECT ${USAGE_FIELDS} FROM assistant_usage_events`).iterate()) {
         check();
@@ -255,8 +304,18 @@ export class Store {
         const session = sessions.get(row.session_id);
         if (!session) { orphan++; continue; }
         usageFields(row);
+        modelTypes.add(row.model);
         if (!period.contains(key)) continue;
+        if (typeof session.repository === "string" && session.repository.trim()) periodRepositories.add(session.repository);
+        if (sid === null && ((args.repository !== undefined && session.repository !== args.repository)
+          || (args.model !== undefined && row.model !== args.model))) continue;
         session.acc.add(row); session.models.add(row.model);
+        if (sid === null && key) {
+          const time = formatTime(row.created_at, period.formatter)!;
+          const bucket = period.day !== null ? time.slice(0, 13) + ":00" : time.slice(0, 10);
+          if (!usageTrend.has(bucket)) usageTrend.set(bucket, new Metrics());
+          usageTrend.get(bucket)!.add(row);
+        }
         if (key && (!session.latest_key || compareTime(key, session.latest_key) > 0)) {
           session.latest_key = key; session.latest_request = row.created_at;
         }
@@ -272,11 +331,12 @@ export class Store {
           if (grouped && selectedRound === undefined) {
             let group = groups.get(row.turn_index);
             if (!group) {
-              group = { turn_index: row.turn_index, metrics: new Metrics(), models: new Set(),
+              group = { turn_index: row.turn_index, request_id: row.id, metrics: new Metrics(), models: new Set(),
                 first_key: null, last_key: null, first_request: null, last_request: null };
               groups.set(row.turn_index, group);
             }
             group.metrics.add(row); group.models.add(row.model);
+            if (row.id < group.request_id) group.request_id = row.id;
             if (key && (!group.first_key || compareTime(key, group.first_key) < 0)) {
               group.first_key = key; group.first_request = row.created_at;
             }
@@ -289,19 +349,44 @@ export class Store {
       const result: Row = {
         metrics: total.result(), period: period.label, timezone: this.zone, years: [...years].sort((a, b) => b - a),
         schema_versions: versions, diagnostics: { invalid_times: invalid, orphan_requests: orphan },
-        diagnostics_scope: "全库（两项可能重叠；孤立请求不计入会话汇总）", source: this.db, read_at: new Date().toISOString(),
+        diagnostics_scope: "Entire database (the two categories may overlap; orphan requests are excluded from Session totals)", source: this.db, read_at: readAt.toISOString(),
       };
       if (sid === null) {
-        const rows = [...sessions.values()].filter(s => period.year === null || s.acc.calls);
+        result.today = today;
+        result.range_start = period.start;
+        result.range_end = period.end;
+        result.usage_trend = [...usageTrend].sort(([a], [b]) => lexical(a, b)).map(([time, metrics]) => ({time, ...metrics.result()}));
+        result.repositories = (period.year === null && !period.start
+          ? [...new Set([...sessions.values()].map(s => s.repository)
+            .filter(repository => typeof repository === "string" && repository.trim()))]
+          : [...periodRepositories]).sort(lexical);
+        result.model_types = [...modelTypes].sort(lexical);
+        const rows = [...sessions.values()].filter(s => (args.repository === undefined || s.repository === args.repository)
+          && ((period.year === null && !period.start && args.model === undefined) || s.acc.calls));
+        const ranked = [...rows].sort((a, b) => sessionTotalOrder(a, b));
+        result.top_sessions = ranked.filter(s => {
+          const total: bigint | null = s.acc.result().total_tokens;
+          return total !== null && total > 0n;
+        }).slice(0, 5).map(sessionRow);
+        result.top_total_tokens = result.top_sessions.reduce((sum: bigint, s: Row) => sum + s.metrics.total_tokens, 0n);
+        result.unknown_total_sessions = rows.filter(s => s.acc.result().total_tokens === null).length;
         rows.sort((a, b) => {
+          if (args.sort === "total_tokens" || args.sort === "total_tokens_asc") {
+            return sessionTotalOrder(a, b, args.sort === "total_tokens_asc");
+          }
           if (!a.latest_key || !b.latest_key) return a.latest_key ? -1 : b.latest_key ? 1 : lexical(a.id, b.id);
-          return -compareTime(a.latest_key, b.latest_key) || lexical(a.id, b.id);
+          return (args.sort === "latest_asc" ? 1 : -1) * compareTime(a.latest_key, b.latest_key) || lexical(a.id, b.id);
+        });
+        result.session_usage = rows.map(session => {
+          const row = sessionRow(session);
+          return {id: row.id, title: row.title, project: row.project, metrics: row.metrics};
         });
         check();
         const page = pageNumber(args, "page");
-        result.pagination = paged(BigInt(rows.length), page, 20);
+        const pageSize = Number(args.pageSize ?? "20");
+        result.pagination = paged(BigInt(rows.length), page, pageSize);
         result.session_count = rows.length;
-        result.sessions = rows.slice((page - 1) * 20, page * 20).map(sessionRow);
+        result.sessions = rows.slice((page - 1) * pageSize, page * pageSize).map(sessionRow);
       } else {
         result.session = sessionRow(sessions.get(sid)!);
         result.models = [...models.entries()].sort(([a], [b]) => lexical(a, b)).map(([model, acc]) => ({ model, ...acc.result() }));
@@ -310,7 +395,7 @@ export class Store {
           for (const turn of db.query<Row, [string]>("SELECT turn_index,substr(user_message,1,240) AS summary FROM turns WHERE session_id=?").iterate(sid)) {
             check(); textFields(turn, ["summary"]);
             if (turn.turn_index === null) continue;
-            if (typeof turn.turn_index !== "bigint") throw new StoreError("对话轮次序号类型不兼容");
+            if (typeof turn.turn_index !== "bigint") throw new StoreError("Incompatible conversation Round index type");
             const previous = previews.get(turn.turn_index);
             previews.set(turn.turn_index, {count: (previous?.count ?? 0n) + 1n, summary: turn.summary});
           }
@@ -320,27 +405,17 @@ export class Store {
             const state = group.turn_index === null ? "no_index" : !preview ? "missing"
               : preview.count !== 1n ? "ambiguous" : preview.summary ? "recorded" : "missing";
             return {
-              turn_index: group.turn_index, metrics: group.metrics.result(), models: [...group.models].sort(lexical),
+              turn_index: group.turn_index, request_id: group.request_id, metrics: group.metrics.result(), models: [...group.models].sort(lexical),
               first_request: group.first_request, last_request: group.last_request, invalid_time: group.first_key === null,
               summary_status: state, summary: state === "recorded" ? preview!.summary
-                : state === "ambiguous" ? "本轮对话无法唯一确认。" : state === "no_index" ? "未记录轮次，无法关联对话。" : "本轮对话尚未记录。",
+                : state === "ambiguous" ? "This Round's conversation cannot be uniquely identified." : state === "no_index" ? "No Round index was recorded; the conversation cannot be linked." : "This Round's conversation has not been recorded yet.",
             };
           };
-          const rows = [...groups.values()].sort((a, b) => {
-            const time = !a.last_key || !b.last_key ? (a.last_key ? -1 : b.last_key ? 1 : 0) : -compareTime(a.last_key, b.last_key);
-            if (time) return time;
-            if (a.turn_index === null || b.turn_index === null) return a.turn_index === b.turn_index ? 0 : a.turn_index === null ? 1 : -1;
-            return a.turn_index > b.turn_index ? -1 : a.turn_index < b.turn_index ? 1 : 0;
-          });
+          const rows = [...groups.values()].sort((a, b) => roundOrder(a, b));
           const page = pageNumber(args, "roundPage");
           result.round_pagination = paged(BigInt(rows.length), page, 10);
-          result.rounds = rows.slice((page - 1) * 10, page * 10).map(roundRow);
-          result.round_trend = [...rows].sort((a, b) => {
-            const time = !a.first_key || !b.first_key ? (a.first_key ? -1 : b.first_key ? 1 : 0) : compareTime(a.first_key, b.first_key);
-            if (time) return time;
-            if (a.turn_index === null || b.turn_index === null) return a.turn_index === b.turn_index ? 0 : a.turn_index === null ? 1 : -1;
-            return a.turn_index < b.turn_index ? -1 : a.turn_index > b.turn_index ? 1 : 0;
-          }).map(roundRow);
+          result.rounds = [...rows].sort((a, b) => roundOrder(a, b, true)).slice((page - 1) * 10, page * 10).map(roundRow);
+          result.round_trend = rows.map(roundRow);
         } else {
           if (grouped) {
             result.round = selectedRound;
@@ -381,22 +456,22 @@ export class Store {
     if (turnIndex !== undefined && count !== 1n) {
       result.turn_pagination = paged(0n, turnPage, 20);
       result.turns = [];
-      if (args.expandedTurn !== undefined) throw new StoreError("没有唯一关联的对话，无法展开正文", 404);
+      if (args.expandedTurn !== undefined) throw new StoreError("No conversation is uniquely linked; its content cannot be expanded", 404);
       return count;
     }
     result.turn_pagination = paged(count, turnPage, 20);
     const expanded = args.expandedTurn;
-    if (expanded !== undefined && !/^[0-9]{1,20}$/.test(expanded)) throw new StoreError("展开轮次 ID 无效", 400);
+    if (expanded !== undefined && !/^[0-9]{1,20}$/.test(expanded)) throw new StoreError("Invalid expanded Round ID", 400);
     const rows = db.query<Row, Array<string | bigint | number | null>>(`SELECT id,turn_index,timestamp,
       CASE WHEN ? OR CAST(id AS TEXT)=? THEN user_message ELSE substr(user_message,1,400) END AS user_message,
       CASE WHEN ? OR CAST(id AS TEXT)=? THEN assistant_response ELSE substr(assistant_response,1,400) END AS assistant_response,
       length(user_message)>400 OR length(assistant_response)>400 AS truncated FROM turns WHERE ${where}
       ORDER BY tf_seconds(timestamp) IS NULL,tf_seconds(timestamp) DESC,tf_fraction(timestamp) COLLATE BINARY DESC,
       turn_index DESC,id DESC LIMIT 20 OFFSET ?`).all(Number(args.full === "1"), expanded ?? null, Number(args.full === "1"), expanded ?? null, ...values, (turnPage - 1) * 20);
-    if (expanded !== undefined && !rows.some(r => String(r.id) === expanded)) throw new StoreError("该轮次不在当前页或已被删除，请刷新", 404);
+    if (expanded !== undefined && !rows.some(r => String(r.id) === expanded)) throw new StoreError("The Round is not on this page or was deleted; refresh the page", 404);
     result.turns = rows.map(row => {
       check();
-      if (typeof row.id !== "bigint" || typeof row.turn_index !== "bigint") throw new StoreError("对话轮次 ID 或序号类型不兼容");
+      if (typeof row.id !== "bigint" || typeof row.turn_index !== "bigint") throw new StoreError("Incompatible conversation Round ID or index type");
       textFields(row, ["timestamp", "user_message", "assistant_response"]);
       return { ...row, truncated: args.full !== "1" && !!row.truncated && String(row.id) !== expanded };
     });

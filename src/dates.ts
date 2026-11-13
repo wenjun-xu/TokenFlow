@@ -44,7 +44,7 @@ export function zoneFormatter(zone: string): Intl.DateTimeFormat {
   });
   const options = formatter.resolvedOptions();
   if (options.calendar !== "gregory" || options.numberingSystem !== "latn" || options.hourCycle !== "h23") {
-    throw new Error("无法验证 Gregorian OS 本地时区");
+    throw new Error("Could not verify the Gregorian OS-local time zone");
   }
   return formatter;
 }
@@ -60,12 +60,12 @@ export function formatTime(value: unknown, formatter: Intl.DateTimeFormat): stri
 export function systemZone(localtime = "/etc/localtime"): string {
   let path: string;
   try { path = realpathSync(localtime); }
-  catch { throw new Error("无法读取 OS 本地时区，请检查系统时区配置后重试"); }
+  catch { throw new Error("Could not read the OS-local time zone; check the system time zone configuration and try again"); }
   const marker = "/zoneinfo/";
-  if (!path.includes(marker)) throw new Error("OS 本地时区不是支持的 IANA zoneinfo 链接，已拒绝启动");
+  if (!path.includes(marker)) throw new Error("The OS-local time zone is not a supported IANA zoneinfo link; startup was refused");
   const name = path.slice(path.indexOf(marker) + marker.length);
   try { zoneFormatter(name); }
-  catch { throw new Error("OS 本地 IANA 时区不受支持，已拒绝启动"); }
+  catch { throw new Error("The OS-local IANA time zone is unsupported; startup was refused"); }
   return name;
 }
 
@@ -82,21 +82,38 @@ export class Period {
   day: number | null = null;
   label: string;
   formatter: Intl.DateTimeFormat;
+  start: string | null = null;
+  end: string | null = null;
   constructor(args: Args, readonly zone: string) {
     this.formatter = zoneFormatter(zone);
+    if (args.start !== undefined || args.end !== undefined) {
+      const valid = (value: string | undefined) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
+        && civil(...value.split("-").map(Number) as [number, number, number]) !== null;
+      if (!valid(args.start) || !valid(args.end) || args.start! > args.end!
+        || ["year", "month", "day"].some(field => args[field] !== undefined)) throw Error("Invalid date range");
+      this.start = args.start!;
+      this.end = args.end!;
+      this.label = `${this.start} ~ ${this.end}`;
+      return;
+    }
     let previous = true;
     for (const field of ["year", "month", "day"] as const) {
       const raw = args[field];
       if (raw === "" || raw === undefined || raw === null) { previous = false; continue; }
-      if (!previous || typeof raw !== "string" || !/^[0-9]{1,4}$/.test(raw)) throw Error("日期条件无效");
+      if (!previous || typeof raw !== "string" || !/^[0-9]{1,4}$/.test(raw)) throw Error("Invalid date filter");
       this[field] = Number(raw);
     }
-    if (this.year !== null && !civil(this.year, this.month ?? 1, this.day ?? 1)) throw Error("日期条件无效");
-    this.label = this.year === null ? "全部时间" : String(this.year).padStart(4, "0")
+    if (this.year !== null && !civil(this.year, this.month ?? 1, this.day ?? 1)) throw Error("Invalid date filter");
+    this.label = this.year === null ? "All" : String(this.year).padStart(4, "0")
       + (this.month === null ? "" : "-" + String(this.month).padStart(2, "0"))
       + (this.day === null ? "" : "-" + String(this.day).padStart(2, "0"));
   }
   contains(key: TimeKey): boolean {
+    if (this.start && this.end) {
+      const date = localDate(key, this.formatter);
+      const text = date?.map((value, index) => String(value).padStart(index === 0 ? 4 : 2, "0")).join("-");
+      return !!text && text >= this.start && text <= this.end;
+    }
     if (this.year === null) return true;
     const current = localDate(key, this.formatter);
     return !!current && current[0] === this.year

@@ -19,7 +19,7 @@ test("occupied legacy flock cannot coexist, overwrite state, or signal stale PID
   const f = new Fixture(); f.session(); f.usage();
   const legacy = await simulator(f, "hold");
   try {
-    await expect(start(f.db, f.state, 0.3)).rejects.toThrow("未按旧 PID");
+    await expect(start(f.db, f.state, 0.3)).rejects.toThrow("using a stale PID");
     expect(existsSync(join(f.state, "c"))).toBe(false);
     expect(existsSync(join(f.state, "state.json"))).toBe(false);
     expect(existsSync(join(f.state, "service.log"))).toBe(false);

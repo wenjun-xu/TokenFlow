@@ -6,7 +6,7 @@ import { StoreError } from "./store";
 export type EventData = Record<string, unknown>;
 export type SessionEvent = { type: string; timestamp: string | null; agentId: string | null; data: EventData };
 export class MissingEventsError extends StoreError {
-  constructor() { super("该会话没有本地 events.jsonl，详细记录不可用", 404); }
+  constructor() { super("This Session has no local events.jsonl; detailed records are unavailable", 404); }
 }
 export function isRecord(value: unknown): value is EventData {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -18,36 +18,36 @@ export function contentText(value: unknown): string | null {
 function parseEvent(line: string): SessionEvent {
   let value: unknown;
   try { value = JSON.parse(line); }
-  catch { throw new StoreError("本地会话日志含损坏的完整记录，已停止读取"); }
+  catch { throw new StoreError("The local Session log contains a corrupt complete record; reading was stopped"); }
   if (!isRecord(value) || typeof value.type !== "string" || !isRecord(value.data)
     || (value.agentId !== undefined && value.agentId !== null && typeof value.agentId !== "string")) {
-    throw new StoreError("本地会话日志结构不兼容");
+    throw new StoreError("Incompatible local Session log structure");
   }
   return { type: value.type, timestamp: stringValue(value.timestamp), agentId: stringValue(value.agentId), data: value.data };
 }
 
 export async function* sessionEvents(db: string, sid: string, diagnostics: { partial_tail: boolean }): AsyncGenerator<SessionEvent> {
-  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(sid)) throw new StoreError("会话 ID 不适用于本地日志路径", 400);
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(sid)) throw new StoreError("The Session ID is not valid for a local log path", 400);
   const root = join(dirname(db), "session-state"), directory = join(root, sid), path = join(directory, "events.jsonl");
   let fd: number;
   try {
     for (const entry of [root, directory, path]) {
       const info = lstatSync(entry);
       if (info.isSymbolicLink() || info.uid !== process.getuid!() || (entry === path ? !info.isFile() : !info.isDirectory())) {
-        throw new StoreError("本地会话日志路径或文件身份不安全，已拒绝读取");
+        throw new StoreError("The local Session log path or file identity is unsafe; reading was refused");
       }
     }
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new MissingEventsError();
     if (error instanceof StoreError) throw error;
-    throw new StoreError("无法只读访问本地会话日志，请检查权限");
+    throw new StoreError("Could not access the local Session log read-only; check permissions");
   }
   try {
     const initial = fstatSync(fd);
-    if (!initial.isFile() || initial.uid !== process.getuid!()) throw new StoreError("本地会话日志文件身份不安全");
+    if (!initial.isFile() || initial.uid !== process.getuid!()) throw new StoreError("Unsafe local Session log file identity");
     // ponytail: scan at most 128 MiB per request; add an index only if measured latency requires it.
-    if (initial.size > 128 * 1024 * 1024) throw new StoreError("本地会话日志超过 128 MiB 读取上限");
+    if (initial.size > 128 * 1024 * 1024) throw new StoreError("The local Session log exceeds the 128 MiB read limit");
     const decoder = new StringDecoder("utf8");
     let pending = "", sourceSession: string | null = null;
     if (initial.size) {
@@ -59,12 +59,12 @@ export async function* sessionEvents(db: string, sid: string, diagnostics: { par
           const line = pending.slice(0, newline);
           pending = pending.slice(newline + 1);
           if (!line.trim()) continue;
-          if (Buffer.byteLength(line) > 16 * 1024 * 1024) throw new StoreError("本地会话日志单条记录超过读取上限");
+          if (Buffer.byteLength(line) > 16 * 1024 * 1024) throw new StoreError("A local Session log record exceeds the read limit");
           const item = parseEvent(line);
           if (item.type === "session.start" && !item.agentId) sourceSession = stringValue(item.data.sessionId);
           yield item;
         }
-        if (Buffer.byteLength(pending) > 16 * 1024 * 1024) throw new StoreError("本地会话日志单条记录超过读取上限");
+        if (Buffer.byteLength(pending) > 16 * 1024 * 1024) throw new StoreError("A local Session log record exceeds the read limit");
       }
       pending += decoder.end();
     }
@@ -72,11 +72,11 @@ export async function* sessionEvents(db: string, sid: string, diagnostics: { par
     diagnostics.partial_tail = pending.length > 0;
     const final = fstatSync(fd), current = lstatSync(path);
     if (final.size < initial.size || current.isSymbolicLink() || current.dev !== initial.dev || current.ino !== initial.ino) {
-      throw new StoreError("读取期间本地会话日志被替换或截断，请重试");
+      throw new StoreError("The local Session log was replaced or truncated while reading; try again");
     }
-    if (sourceSession !== sid) throw new StoreError("本地会话日志不属于该会话，已拒绝关联");
+    if (sourceSession !== sid) throw new StoreError("The local log does not belong to this Session; linking was refused");
   } catch (error) {
     if (error instanceof StoreError) throw error;
-    throw new StoreError("本地会话日志读取失败，请检查文件及权限");
+    throw new StoreError("Failed to read the local Session log; check the file and permissions");
   } finally { closeSync(fd); }
 }

@@ -17,7 +17,7 @@ export function command(...args: string[]): string[] {
 export function fileIdentity(path: string): [number, number] {
   const st = statSync(path, { bigint: true });
   const values = [Number(st.dev), Number(st.ino)];
-  if (values.some(v => !Number.isSafeInteger(v))) throw new StoreError("源数据库文件身份超出平台支持范围");
+  if (values.some(v => !Number.isSafeInteger(v))) throw new StoreError("Source database file identity exceeds platform limits");
   return values as [number, number];
 }
 export function validateSource(input: string, state: string): string {
@@ -25,18 +25,18 @@ export function validateSource(input: string, state: string): string {
   let path: string;
   try {
     const originalStat = lstatSync(original);
-    if (originalStat.isSymbolicLink() && originalStat.uid !== process.getuid!()) throw new StoreError("数据库符号链接必须由当前用户拥有");
+    if (originalStat.isSymbolicLink() && originalStat.uid !== process.getuid!()) throw new StoreError("The database symlink must be owned by the current user");
     path = realpathSync(original);
     const metadata = statSync(path);
-    if (!metadata.isFile() || metadata.uid !== process.getuid!() || !(metadata.mode & 0o444)) throw new StoreError("数据库必须是当前用户拥有的可读普通文件");
+    if (!metadata.isFile() || metadata.uid !== process.getuid!() || !(metadata.mode & 0o444)) throw new StoreError("The database must be a readable regular file owned by the current user");
   } catch (error) {
     if (error instanceof StoreError) throw error;
-    throw new StoreError("源数据库不存在或无法访问；请使用 --db 指定已有数据库");
+    throw new StoreError("The source database is missing or inaccessible; use --db to specify an existing database");
   }
   const rel = relative(state, path);
-  if (rel === "" || (!rel.startsWith(".." + "/") && rel !== ".." && !rel.startsWith("/"))) throw new StoreError("源数据库不能放在 TokenFlow 状态目录中");
+  if (rel === "" || (!rel.startsWith(".." + "/") && rel !== ".." && !rel.startsWith("/"))) throw new StoreError("The source database cannot be inside the TokenFlow state directory");
   for (const suffix of ["-wal", "-shm", "-journal"]) {
-    try { if (lstatSync(path + suffix).isSymbolicLink()) throw new StoreError("数据库 sidecar 不能是符号链接"); }
+    try { if (lstatSync(path + suffix).isSymbolicLink()) throw new StoreError("Database sidecar files cannot be symlinks"); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
   return path;
@@ -55,7 +55,7 @@ async function bounded<T>(child: Child, work: Promise<T>, seconds: number): Prom
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([work, new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new StoreError("完整读取任务超时（含聚合及排序），请缩小范围后重试")), seconds * 1000);
+      timer = setTimeout(() => reject(new StoreError("The complete read operation timed out (including aggregation and sorting); narrow the range and try again")), seconds * 1000);
     })]);
   } catch (error) { await terminate(child); throw error; }
   finally { clearTimeout(timer); }
@@ -66,16 +66,16 @@ export function assertIsolated(state: string) {
   try { fd = openSync(probe, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600); }
   catch (error) {
     if (["EPERM", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
-    throw new StoreError("无法证明文件写入隔离，已拒绝打开源库");
+    throw new StoreError("File-write isolation could not be verified; opening the source database was refused");
   }
   closeSync(fd); unlinkSync(probe);
-  throw new StoreError("内部读取未受文件写入隔离保护，已拒绝打开源库");
+  throw new StoreError("The internal reader is not protected by file-write isolation; opening the source database was refused");
 }
 export async function verifyIsolation(state: string, sandbox = SANDBOX) {
-  if (process.platform !== "darwin") throw new StoreError("需要 macOS sandbox-exec 文件隔离，已拒绝读取源库");
+  if (process.platform !== "darwin") throw new StoreError("macOS sandbox-exec file isolation is required; reading the source database was refused");
   const probe = join(state, "isolation-probe.db"), forbidden = join(state, "isolation-forbidden");
   for (const file of [probe, probe + "-wal", probe + "-shm", forbidden, forbidden + "-create"]) {
-    try { lstatSync(file); throw new StoreError("隔离探针状态残留，请检查自身状态目录"); }
+    try { lstatSync(file); throw new StoreError("Stale isolation probe state remains; check the state directory"); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
   let db: Database | undefined;
@@ -89,11 +89,11 @@ export async function verifyIsolation(state: string, sandbox = SANDBOX) {
     try { child = Bun.spawn([sandbox, "-p", PROFILE, ...command("_probe", probe, forbidden)], {
       stdout: "pipe", stderr: "ignore", env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
     }); }
-    catch { throw new StoreError("无法验证 macOS 文件隔离，已拒绝读取源库"); }
+    catch { throw new StoreError("macOS file isolation could not be verified; reading the source database was refused"); }
     const { output, exit } = await bounded(child, (async () => ({
       output: await new Response(child.stdout).text(), exit: await child.exited,
     }))(), 8);
-    if (exit !== 0 || output.trim() !== "isolated") throw new StoreError("macOS 文件隔离或只读 WAL 探针失败，已拒绝读取源库");
+    if (exit !== 0 || output.trim() !== "isolated") throw new StoreError("macOS file isolation or the read-only WAL probe failed; reading the source database was refused");
   } finally {
     db?.close();
     for (const file of [probe, probe + "-wal", probe + "-shm", forbidden, forbidden + "-create"]) {
@@ -104,7 +104,7 @@ export async function verifyIsolation(state: string, sandbox = SANDBOX) {
 export function probeMain(db: string, forbidden: string): number {
   const state = stateDirectory(dirname(db), false);
   if (dirname(forbidden) !== state || basename(db) !== "isolation-probe.db"
-    || basename(forbidden) !== "isolation-forbidden") throw new StoreError("隔离探针参数无效，已拒绝打开源库");
+    || basename(forbidden) !== "isolation-forbidden") throw new StoreError("Invalid isolation probe arguments; opening the source database was refused");
   assertIsolated(state);
   for (const file of [forbidden + "-create", forbidden]) {
     let fd;
@@ -137,23 +137,23 @@ export class QueryRunner {
   get busy() { return this.child !== null; }
   private validateIdentity() {
     const db = validateSource(this.db, this.state);
-    if (JSON.stringify(fileIdentity(db)) !== JSON.stringify(this.file_identity)) throw new StoreError("源数据库已替换，请停止后重新启动服务");
+    if (JSON.stringify(fileIdentity(db)) !== JSON.stringify(this.file_identity)) throw new StoreError("The source database was replaced; stop and restart the service");
   }
   async run(operation: "dashboard" | "session" | "rounds" | "activities" | "request" | "tools" | "call", args: Args, sid: string | null = null, requestId: string | null = null): Promise<any> {
     if (this.child) {
-      if (this.waiting) throw new StoreError("读取繁忙，请稍后重试");
+      if (this.waiting) throw new StoreError("The reader is busy; try again later");
       this.waiting = true;
       try {
         const until = performance.now() + 250;
         while (this.child && performance.now() < until && !this.closed) await Bun.sleep(10);
-        if (this.child) throw new StoreError("读取繁忙，请稍后重试");
+        if (this.child) throw new StoreError("The reader is busy; try again later");
       } finally { this.waiting = false; }
     }
-    if (this.closed) throw new StoreError("服务正在停止，请执行 tokenflow start");
+    if (this.closed) throw new StoreError("The service is stopping; run tokenflow start");
     this.validateIdentity();
     const request = JSON.stringify({ db: this.db, state: this.state, zone: this.zone, operation, args, sid, request_id: requestId,
       file_identity: this.file_identity, timeout: Math.max(0.01, this.timeout - 1) });
-    if (Buffer.byteLength(request) > 16384) throw new StoreError("查询参数过长", 400);
+    if (Buffer.byteLength(request) > 16384) throw new StoreError("Query parameters are too long", 400);
     let child;
     try { child = Bun.spawn([SANDBOX, "-p", PROFILE, ...this.workerCommand()], {
       stdin: "pipe", stdout: "pipe", stderr: "ignore", env: {
@@ -162,19 +162,19 @@ export class QueryRunner {
         ...(process.arch === "x64" ? { BUN_JSC_useJIT: "0" } : {}),
       },
     }); }
-    catch { throw new StoreError("无法启动隔离读取进程，请检查安装"); }
+    catch { throw new StoreError("Could not start the isolated reader; check the installation"); }
     this.child = child;
     try {
       child.stdin.write(request); child.stdin.end();
       const output = await bounded(child, (async () => {
         const text = await new Response(child.stdout).text();
-        if (await child.exited !== 0) throw new StoreError("隔离读取进程失败或已取消，请检查 macOS 隔离支持");
+        if (await child.exited !== 0) throw new StoreError("The isolated reader failed or was cancelled; check macOS isolation support");
         return text;
       })(), this.timeout);
       let response;
-      try { response = JSON.parse(output); } catch { throw new StoreError("隔离读取进程返回无效结果"); }
+      try { response = JSON.parse(output); } catch { throw new StoreError("The isolated reader returned an invalid result"); }
       if (response.error) throw new StoreError(response.error, response.status);
-      if (!response.data) throw new StoreError("隔离读取进程返回无效结果");
+      if (!response.data) throw new StoreError("The isolated reader returned an invalid result");
       this.validateIdentity();
       return response.data;
     } finally { await terminate(child); this.child = null; }
@@ -191,18 +191,18 @@ export async function workerMain(): Promise<number> {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.length;
-      if (size > 16384) { await reader.cancel(); throw new StoreError("查询参数过长", 400); }
+      if (size > 16384) { await reader.cancel(); throw new StoreError("Query parameters are too long", 400); }
       chunks.push(value);
     }
     const request = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     const state = stateDirectory(request.state, false);
     assertIsolated(state);
     const db = validateSource(request.db, state);
-    if (JSON.stringify(fileIdentity(db)) !== JSON.stringify(request.file_identity)) throw new StoreError("源数据库已替换，请重新启动");
+    if (JSON.stringify(fileIdentity(db)) !== JSON.stringify(request.file_identity)) throw new StoreError("The source database was replaced; restart the service");
     if (typeof request.zone !== "string" || typeof request.timeout !== "number" || request.timeout <= 0
-      || !request.args || typeof request.args !== "object" || Array.isArray(request.args)) throw new StoreError("查询参数或时区配置无效", 400);
+      || !request.args || typeof request.args !== "object" || Array.isArray(request.args)) throw new StoreError("Invalid query parameters or time zone configuration", 400);
     zoneFormatter(request.zone);
-    if (request.operation === "call" && Object.keys(request.args).length) throw new StoreError("未知查询参数", 400);
+    if (request.operation === "call" && Object.keys(request.args).length) throw new StoreError("Unknown query parameter", 400);
     const store = new Store(db, request.zone, request.timeout);
     const data = request.operation === "dashboard" ? store.dashboard(request.args)
       : request.operation === "session" && typeof request.sid === "string" ? store.session(request.sid, request.args)
@@ -214,12 +214,12 @@ export async function workerMain(): Promise<number> {
         ? await toolActivity(db, request.sid, store.toolAnchor(request.sid, request.request_id), request.args, request.zone)
       : request.operation === "call" && typeof request.sid === "string" && typeof request.request_id === "string"
         ? await singleCall(db, request.sid, store.callAnchor(request.sid, request.request_id), request.zone)
-      : (() => { throw new StoreError("未知读取操作", 400); })();
-    if (JSON.stringify(fileIdentity(db)) !== JSON.stringify(request.file_identity)) throw new StoreError("读取期间源数据库已替换，请重新启动");
+      : (() => { throw new StoreError("Unknown read operation", 400); })();
+    if (JSON.stringify(fileIdentity(db)) !== JSON.stringify(request.file_identity)) throw new StoreError("The source database was replaced while reading; restart the service");
     result = { data };
   } catch (error) {
     result = error instanceof StoreError ? { error: error.message, status: error.status }
-      : { error: "源数据库、查询参数或状态目录不可访问，请检查权限和配置", status: 503 };
+      : { error: "The source database, query parameters, or state directory are inaccessible; check permissions and configuration", status: 503 };
   }
   console.log(JSON.stringify(result));
   return 0;
